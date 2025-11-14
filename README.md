@@ -109,4 +109,4 @@ TIMEFRAME = "1wk"   # Mude o timeframe (1d, 1wk, 1mo)
 ## 📄 Licença
 
 Este projeto está sob a licença MIT. Veja o arquivo `LICENSE` para mais detalhes.
-\ No newline at end of file
+
