@@ -1,0 +1,20 @@
+[project]
+name = "co-piloto-quant"
+version = "0.1.0"
+description = "Um sistema de suporte à decisão para análise de ativos financeiros."
+authors = [{ name = "Seu Nome", email = "seu@email.com" }]
+requires-python = ">=3.9"
+dependencies = [
+    "pandas>=2.0.0",
+    "yahooquery>=2.3.0",
+    "pandas-ta>=0.3.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-mock>=3.8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
