@@ -1,5 +1,5 @@
-# Co-piloto Quantitativo
-# Co-Piloto Quant 📈
+# quantitative-trading-system
+# quantitative-trading-system 📈
  
 ## 🎯 Objetivo do Projeto
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
