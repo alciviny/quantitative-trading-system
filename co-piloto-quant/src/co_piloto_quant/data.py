@@ -2,7 +2,7 @@ import pandas as pd
 import yahooquery as yq
 
 
-def fetch_data(ativo: str, periodo: str = "200d", timeframe: str = "1d") -> pd.DataFrame:
+def fetch_data(ativo: str, periodo: str = "5y", timeframe: str = "1d") -> pd.DataFrame:
    
     try:
         ticker = yq.Ticker(ativo)
