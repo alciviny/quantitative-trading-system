@@ -1,0 +1,34 @@
+# Guia de Comandos Essenciais
+
+Este arquivo serve como um guia rápido para executar as principais funcionalidades do projeto Co-Piloto Quant.
+
+## Fluxo de Trabalho Padrão
+
+O fluxo consiste em duas etapas principais: primeiro, processar os dados de um ativo e, em seguida, visualizar a análise no dashboard.
+
+---
+
+### Etapa 1: Gerar os Dados Processados
+
+Este comando baixa os dados brutos do mercado, realiza a limpeza e os cálculos necessários, e salva o resultado em um arquivo `.csv` na pasta de dados processados.
+
+**Comando:**
+`python scripts/run_pipeline.py --ticker SEU_ATIVO`
+
+**Exemplo Prático:**
+Para processar os dados da Vale (VALE3), use:
+`python scripts/run_pipeline.py --ticker VALE3.SA`
+---
+
+### Etapa 2: Visualizar o Dashboard de Análise
+
+Após gerar os dados na Etapa 1, este comando carrega esses dados e exibe o painel de análise técnica com gráficos e indicadores.
+
+**Importante:** Certifique-se de usar o mesmo ticker da Etapa 1.
+
+**Comando:**
+`python scripts/run_dashboard.py --ticker SEU_ATIVO`
+
+**Exemplo Prático:**
+Para visualizar a análise da Vale (VALE3), use:
+`python scripts/run_dashboard.py --ticker VALE3.SA`
