@@ -1,13 +1,14 @@
-from co_piloto_quant.data import fetch_data
-from co_piloto_quant.analysis import calculate_indicators, check_rules
 import pandas as pd
+from datetime import datetime
+from co_piloto_quant.analysis import calculate_indicators, check_rules, load_processed_data
 
 def run_analysis(asset: str, timeframe: str, rsi_period: int) -> dict:
-    dados = fetch_data(ativo=asset, timeframe=timeframe)
-    print(f"Total de dados baixados: {len(dados)} candles")
+   
+    dados = load_processed_data(ticker=asset)
+    print(f"Total de dados carregados: {len(dados)} candles")
 
     if dados.empty:
-        return {"success": False, "error": f"Não foi possível obter dados para o ativo '{asset}'."}
+        return {"success": False, "error": f"Não foi possível obter dados para o ativo '{asset}'. Execute o pipeline de dados primeiro."}
 
     dados_com_indicadores = calculate_indicators(dados, rsi_period=rsi_period)
 
@@ -37,7 +38,7 @@ def run_analysis(asset: str, timeframe: str, rsi_period: int) -> dict:
     return dashboard_data
 
 def display_dashboard(data: dict):
-
+  
     print("\n" + "="*40)
     print(f"--- Dashboard de Confirmação: {data['asset']} ({data['timeframe']}) ---")
     print(f"Período IFR: {data['rsi_period']}")
@@ -52,22 +53,28 @@ def display_dashboard(data: dict):
     print("------------------------------------------\n")
 
 
+import argparse
+
 if __name__ == "__main__":
-
-    ATIVO = "PETR4.SA"
-    TIMEFRAME = "1d"
-    PERIODO_IFR = 120
-
-
-    analysis_result = run_analysis(ATIVO, TIMEFRAME, PERIODO_IFR)
+    parser = argparse.ArgumentParser(description="Dashboard de Análise Técnica de Ativos.")
+    parser.add_argument("--ticker", type=str, required=True, help="O ticker do ativo a ser analisado (ex: PETR4.SA).")
+    
+    args = parser.parse_args()
 
     
+    TIMEFRAME = "1d"
+    RSI_PERIOD = 120 
+    
+  
+    analysis_result = run_analysis(args.ticker, TIMEFRAME, RSI_PERIOD)
+    
+    # 2. Se a análise for bem-sucedida, exibe os resultados
     if analysis_result["success"]:
         print("\nÚltimos 5 candles com indicadores:")
         print(analysis_result['debug_df'].tail())
         print(f"\nO valor do último IFR calculado é: {analysis_result['ultimo_rsi']:.2f}")
         
-       
         display_dashboard(analysis_result)
     else:
         print(f"\n[FALHA NA ANÁLISE] {analysis_result['error']}")
+        print("Por favor, execute 'python scripts/run_pipeline.py --ticker SEU_ATIVO' para gerar os dados necessários.")

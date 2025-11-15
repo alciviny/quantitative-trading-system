@@ -16,3 +16,7 @@ venv/
 *.egg-info/
 dist/
 build/
+
+# Dados gerados
+src/co_piloto_quant/data/raw/
+src/co_piloto_quant/data/processed/
