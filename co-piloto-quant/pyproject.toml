@@ -8,6 +8,7 @@ dependencies = [
     "pandas>=2.0.0",
     "yahooquery>=2.3.0",
     "pandas-ta>=0.3.0",
+    "plotly>=5.0.0",
 ]
 
 [project.optional-dependencies]

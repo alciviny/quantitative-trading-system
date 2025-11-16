@@ -80,7 +80,7 @@ def main(tickers: list[str]):
     for ticker, results in full_results.items():
         print(f"\nAtivo: {ticker}")
         for rule, result in results.items():
-            status = "✅" if result else "❌"
+            status = "OK" if result else "NEGADO"
             print(f"  {status} {rule}")
 
 if __name__ == '__main__':
