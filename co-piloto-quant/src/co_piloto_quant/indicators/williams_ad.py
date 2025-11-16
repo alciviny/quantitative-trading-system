@@ -13,6 +13,15 @@ def williams_ad(data: pd.DataFrame, smooth_period: int = None) -> pd.Series:
     Returns:
         pd.Series: A pandas Series with the Williams A/D values, smoothed if period is provided.
     """
+    # Make a copy to avoid modifying the original DataFrame and normalize column names
+    data = data.copy()
+    data.rename(columns={
+        'high': 'High',
+        'low': 'Low',
+        'close': 'Close',
+        'volume': 'Volume'
+    }, inplace=True)
+
     if not all(col in data.columns for col in ['High', 'Low', 'Close', 'Volume']):
         raise ValueError("Input DataFrame must contain 'High', 'Low', 'Close', and 'Volume' columns.")
 
@@ -35,9 +44,10 @@ def williams_ad(data: pd.DataFrame, smooth_period: int = None) -> pd.Series:
     williams_ad_series.name = 'williams_ad'
 
     if smooth_period is not None:
-        # Welles Wilder's smoothing is a specific type of EMA
-        smoothed_williams_ad = williams_ad_series.ewm(alpha=1/smooth_period, adjust=False).mean()
-        smoothed_williams_ad.name = f'williams_ad_smma_{smooth_period}'
-        return smoothed_williams_ad
+        # A suavização de Welles Wilder é uma Média Móvel Exponencial (EMA) com alpha = 1 / período.
+        # Usamos adjust=False para corresponder à fórmula recursiva padrão usada em plataformas de trading.
+        wilder_smooth = williams_ad_series.ewm(alpha=1/smooth_period, adjust=False).mean()
+        wilder_smooth.name = f'williams_ad_wilder_{smooth_period}'
+        return wilder_smooth
     
     return williams_ad_series

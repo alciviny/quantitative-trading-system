@@ -1,6 +1,7 @@
 
 import os
 import pandas as pd
+from .data_fetching import fetch_data_from_csv
 
 
 PROCESSED_DATA_PATH = os.path.join(os.path.dirname(__file__), 'processed')
