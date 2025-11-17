@@ -54,11 +54,7 @@ def process_data(raw_data: pd.DataFrame,ticker: str) -> pd.DataFrame:
     return processed_data
 
 def save_processed_data_to_csv(processed_data: pd.DataFrame, filename: str):
-    """
-    Salva os dados processados em um arquivo CSV.
-    Se o arquivo já existir, os novos dados serão concatenados aos dados existentes,
-    removendo duplicatas e mantendo o arquivo atualizado.
-    """
+   
     file_path = os.path.join(PROCESSED_DATA_PATH, filename)
     print(f"Verificando o arquivo em {file_path}...")
 
@@ -78,7 +74,7 @@ def save_processed_data_to_csv(processed_data: pd.DataFrame, filename: str):
             combined_data.reset_index(inplace=True)
 
             print("Removendo e tratando duplicatas...")
-            # Remove duplicatas com base na data e no ticker
+            
             subset_cols = [index_name]
             if 'ticker' in combined_data.columns:
                 subset_cols.append('ticker')
@@ -86,7 +82,7 @@ def save_processed_data_to_csv(processed_data: pd.DataFrame, filename: str):
             combined_data.drop_duplicates(subset=subset_cols, keep='last', inplace=True)
             
             combined_data.set_index(index_name, inplace=True)
-            combined_data.sort_index(inplace=True) # Ordena os dados pela data
+            combined_data.sort_index(inplace=True)  
             
             print("Salvando dados combinados e atualizados...")
             combined_data.to_csv(file_path, index=True)
