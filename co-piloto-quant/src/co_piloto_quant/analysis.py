@@ -7,6 +7,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from co_piloto_quant.data.data_processing import PROCESSED_DATA_PATH
+from co_piloto_quant.indicators.williams_ad import williams_ad
 
 def load_processed_data(ticker: str) -> pd.DataFrame:
   
@@ -28,6 +29,9 @@ def calculate_indicators(df: pd.DataFrame, rsi_period: int = 14) -> pd.DataFrame
  
     rsi_series = df.ta.rsi(length=rsi_period)
     df['RSI'] = rsi_series
+
+    print(f"Calculando Williams A/D (bruto)...")
+    df['Williams_AD'] = williams_ad(df)
     
     print("Indicadores calculados.")
     return df
@@ -51,9 +55,7 @@ def check_rules(latest_data: pd.Series) -> dict:
     return regras
     
 def main(tickers: list[str]):
-    """
-    Função principal para executar a análise para uma lista de tickers.
-    """
+ 
     print("Iniciando análise...")
     full_results = {}
 

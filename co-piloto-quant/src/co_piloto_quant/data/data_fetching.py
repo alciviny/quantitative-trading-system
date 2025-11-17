@@ -17,7 +17,7 @@ def fetch_data(ticker: str, period: str, interval: str) -> pd.DataFrame:
     data = yf.download(tickers=ticker, period=period, interval=interval)
     print("Dados brutos recebidos.")
     
-    # Salvar os dados brutos
+   
     filename = f"{ticker}_raw.csv"
     save_raw_data(data, filename)
     

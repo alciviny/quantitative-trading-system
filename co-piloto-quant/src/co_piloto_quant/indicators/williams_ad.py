@@ -1,51 +1,58 @@
 import pandas as pd
+import numpy as np
 
 def williams_ad(data: pd.DataFrame, smooth_period: int = None) -> pd.Series:
     """
-    Calculates the Williams Accumulation/Distribution (A/D) indicator,
-    with an optional Welles Wilder's smoothing.
+    Calcula o indicador Williams Accumulation/Distribution (A/D).
+
+    Este indicador mede a pressão de compra e venda acumulada, multiplicando
+    a variação de preço pelo volume.
 
     Args:
-        data (pd.DataFrame): DataFrame with 'High', 'Low', 'Close', and 'Volume' columns.
-        smooth_period (int, optional): The period for Welles Wilder's smoothing. 
-                                       If None, raw A/D is returned. Defaults to None.
+        data (pd.DataFrame): DataFrame contendo os dados de preço e volume.
+                             Deve conter as colunas 'high', 'low', 'close', 'volume'.
+        smooth_period (int, optional): O período para suavização opcional
+                                       usando a Média Móvel de Wilder.
+                                       Defaults to None.
 
     Returns:
-        pd.Series: A pandas Series with the Williams A/D values, smoothed if period is provided.
+        pd.Series: Uma série contendo o valor do Williams A/D (suavizado ou não).
+    
+    Raises:
+        ValueError: Se as colunas necessárias não forem encontradas.
     """
-    # Make a copy to avoid modifying the original DataFrame and normalize column names
-    data = data.copy()
-    data.rename(columns={
-        'high': 'High',
-        'low': 'Low',
-        'close': 'Close',
-        'volume': 'Volume'
-    }, inplace=True)
+    required_cols = ['high', 'low', 'close', 'volume']
+    if not all(col in data.columns for col in required_cols):
+        raise ValueError(f"Input DataFrame must contain {required_cols} columns. Found: {data.columns.tolist()}")
 
-    if not all(col in data.columns for col in ['High', 'Low', 'Close', 'Volume']):
-        raise ValueError("Input DataFrame must contain 'High', 'Low', 'Close', and 'Volume' columns.")
+    close = data['close']
+    high = data['high']
+    low = data['low']
+    volume = data['volume']
+    
+    close_yesterday = close.shift(1)
 
-    close_yesterday = data['Close'].shift(1)
+ 
+    true_range_high = np.maximum(high, close_yesterday)
+    true_range_low = np.minimum(low, close_yesterday)
 
-    true_range_high = pd.concat([data['High'], close_yesterday], axis=1).max(axis=1)
-    true_range_low = pd.concat([data['Low'], close_yesterday], axis=1).min(axis=1)
+    
+    conditions = [
+        close > close_yesterday,
+        close < close_yesterday,
+    ]
+    choices = [
+        close - true_range_low,
+        close - true_range_high,
+    ]
+    price_change = np.select(conditions, choices, default=0.0)
 
-    price_change = pd.Series(0.0, index=data.index)
-
-    # Close > Yesterday's Close
-    price_change[data['Close'] > close_yesterday] = data['Close'] - true_range_low
-
-    # Close < Yesterday's Close
-    price_change[data['Close'] < close_yesterday] = data['Close'] - true_range_high
-
-    ad_today = price_change * data['Volume']
-
+ 
+    ad_today = price_change * volume
     williams_ad_series = ad_today.cumsum()
     williams_ad_series.name = 'williams_ad'
 
     if smooth_period is not None:
-        # A suavização de Welles Wilder é uma Média Móvel Exponencial (EMA) com alpha = 1 / período.
-        # Usamos adjust=False para corresponder à fórmula recursiva padrão usada em plataformas de trading.
         wilder_smooth = williams_ad_series.ewm(alpha=1/smooth_period, adjust=False).mean()
         wilder_smooth.name = f'williams_ad_wilder_{smooth_period}'
         return wilder_smooth
