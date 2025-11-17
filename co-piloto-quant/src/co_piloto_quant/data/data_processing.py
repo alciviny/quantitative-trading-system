@@ -2,12 +2,25 @@
 import os
 import pandas as pd
 from .data_fetching import fetch_data_from_csv
+from ..indicators.on_balance_true_range import calculate_obtr
+from ..indicators.williams_ad import calculate_wad
+from ..indicators.ifr_tpm import calculate_ifr
+from ..indicators.bollinger_bands import calculate_bollinger_bands
+from ..indicators.multi_bollinger_bands import calculate_multi_bollinger_bands
 
 
 PROCESSED_DATA_PATH = os.path.join(os.path.dirname(__file__), 'processed')
 os.makedirs(PROCESSED_DATA_PATH, exist_ok=True)
 
-def process_data(raw_data: pd.DataFrame,ticker: str) -> pd.DataFrame:
+INDICATOR_FUNCTIONS = {
+    'obtr': calculate_obtr,
+    'wad': calculate_wad,
+    'ifr': calculate_ifr,
+    'bbands': calculate_bollinger_bands,
+    'multi_bbands': calculate_multi_bollinger_bands,
+}
+
+def process_data(raw_data: pd.DataFrame, ticker: str, indicators: list = None) -> pd.DataFrame:
     
     processed_data = raw_data.copy()
 
@@ -37,7 +50,23 @@ def process_data(raw_data: pd.DataFrame,ticker: str) -> pd.DataFrame:
         print(f"Colunas disponíveis: {processed_data.columns}")
         raise e 
 
-    
+    if indicators:
+        print(f"Calculando indicadores: {indicators}")
+        for indicator in indicators:
+            if indicator in INDICATOR_FUNCTIONS:
+                try:
+                    # A função do indicador pode retornar um ou mais Series
+                    indicator_output = INDICATOR_FUNCTIONS[indicator](processed_data)
+                    if isinstance(indicator_output, pd.DataFrame):
+                        processed_data = processed_data.join(indicator_output)
+                    else: # Se for uma Series
+                        processed_data[indicator] = indicator_output
+                    print(f"Indicador '{indicator}' calculado e adicionado.")
+                except Exception as e:
+                    print(f"ERRO ao calcular o indicador '{indicator}': {e}")
+            else:
+                print(f"AVISO: Indicador '{indicator}' não reconhecido.")
+
     
     processed_data.dropna(inplace=True)
     print("Valores ausentes (pós-processamento) removidos.")

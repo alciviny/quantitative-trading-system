@@ -58,3 +58,4 @@ def williams_ad(data: pd.DataFrame, smooth_period: int = None) -> pd.Series:
         return wilder_smooth
     
     return williams_ad_series
+    calculate_wad = cauculate_williams_ad
