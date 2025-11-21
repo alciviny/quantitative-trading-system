@@ -46,8 +46,16 @@ def plot_ifr(fig, data, params, row):
 def plot_system_tpm(fig, data, params, indicator_name, row):
     """Plota um indicador com as bandas do System TPM."""
     system_period = params['system_period']
+    # Ordena de forma decrescente: [2.0, 1.5, 1.0, 0.45]
     system_deviations = sorted([0.45, 1.0, 1.5, 2.0], reverse=True)
-    band_colors = ['rgba(0, 255, 0, 0.2)', 'rgba(0, 255, 255, 0.2)', 'rgba(255, 255, 0, 0.2)', 'rgba(255, 0, 0, 0.2)']
+    
+    # CORES DEFINIDAS: Verde para 0.45, Cinza para o resto
+    band_colors = [
+        'rgba(128, 128, 128, 0.15)', # 2.0 - Neutro (Cinza)
+        'rgba(128, 128, 128, 0.15)', # 1.5 - Neutro (Cinza)
+        'rgba(128, 128, 128, 0.15)', # 1.0 - Neutro (Cinza)
+        'rgba(0, 255, 0, 0.15)'      # 0.45 - Normalidade (Verde)
+    ]
 
     system_df = calculate_system_tpm(data, indicator=indicator_name, period=system_period, deviations=system_deviations)
     data = data.join(system_df)
@@ -158,14 +166,4 @@ if __name__ == "__main__":
     )
 
     # Parâmetros para os indicadores
-    parser.add_argument("--bb_period", type=int, default=200, help="Período para as Bandas de Bollinger do preço.")
-    parser.add_argument("--bb_std_dev", type=float, default=2.0, help="Desvio padrão para as Bandas de Bollinger do preço.")
-    parser.add_argument("--ifr_period", type=int, default=120, help="Período para o IFR.")
-    parser.add_argument("--system_period", type=int, default=200, help="Período para o cálculo do System TPM.")
-    
-    args = parser.parse_args()
-
-    visualize(args)
-
-
-    """ python scripts/visualize_indicator.py --ticker PETR4.SA price obtr wad ifr """
+    parser.add_argument("--bb_period", type=int, default=200, help="Período

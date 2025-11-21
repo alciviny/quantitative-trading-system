@@ -5,8 +5,7 @@ def williams_ad(data: pd.DataFrame, smooth_period: int = None) -> pd.Series:
     """
     Calcula o indicador Williams Accumulation/Distribution (A/D).
 
-    Este indicador mede a pressão de compra e venda acumulada, multiplicando
-    a variação de preço pelo volume.
+    Este indicador mede a pressão de compra e venda acumulada.
 
     Args:
         data (pd.DataFrame): DataFrame contendo os dados de preço e volume.
@@ -48,9 +47,8 @@ def williams_ad(data: pd.DataFrame, smooth_period: int = None) -> pd.Series:
     price_change = np.select(conditions, choices, default=0.0)
 
  
-    ad_today = price_change * volume
-    williams_ad_series = ad_today.cumsum()
-    williams_ad_series.name = 'williams_ad'
+    ad_today = price_change
+    williams_ad_series = pd.Series(ad_today.cumsum(), index=data.index, name='williams_ad')
 
     if smooth_period is not None:
         wilder_smooth = williams_ad_series.ewm(alpha=1/smooth_period, adjust=False).mean()
