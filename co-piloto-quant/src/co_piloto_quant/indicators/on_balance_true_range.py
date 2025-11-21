@@ -1,31 +1,3 @@
-""" import pandas as pd
-import numpy as np
-
-def on_balance_true_range(data: pd.DataFrame) -> pd.DataFrame:
-   
-    if not all(col in data.columns for col in ['High', 'Low', 'Close']):
-        raise ValueError("Input DataFrame must contain 'High', 'Low', and 'Close' columns.")
-
-    high = data['High']
-    low = data['Low']
-    close = data['Close']
-    prev_close = close.shift(1)
-
-    
-    tr1 = high - low
-    tr2 = abs(high - prev_close)
-    tr3 = abs(low - prev_close)
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    tr.iloc[0] = high.iloc[0] - low.iloc[0] 
-
- 
-    price_direction = np.sign(close.diff().fillna(0))
-
-   
-    obtr = (tr * price_direction).cumsum()
-
-    return pd.DataFrame({'OBTR': obtr}, index=data.index) """
-
 import pandas as pd
 import numpy as np
 
@@ -67,5 +39,5 @@ def on_balance_true_range(data: pd.DataFrame) -> pd.DataFrame:
    
     obtr = (tr * price_direction).cumsum()
 
-    return pd.DataFrame({'OBTR': obtr}, index=data.index)
+    return pd.DataFrame({'obtr': obtr}, index=data.index)
 calculate_obtr = on_balance_true_range

@@ -46,14 +46,15 @@ def williams_ad(data: pd.DataFrame, smooth_period: int = None) -> pd.Series:
     ]
     price_change = np.select(conditions, choices, default=0.0)
 
- 
-    ad_today = price_change
-    williams_ad_series = pd.Series(ad_today.cumsum(), index=data.index, name='williams_ad')
+    # Converte qualquer NaN para 0 antes da soma cumulativa para evitar a propagação de NaN
+    ad_today = np.nan_to_num(price_change, nan=0.0)
+    williams_ad_series = pd.Series(ad_today.cumsum(), index=data.index, name='wad')
 
     if smooth_period is not None:
         wilder_smooth = williams_ad_series.ewm(alpha=1/smooth_period, adjust=False).mean()
-        wilder_smooth.name = f'williams_ad_wilder_{smooth_period}'
+        wilder_smooth.name = f'wad_wilder_{smooth_period}'
         return wilder_smooth
     
     return williams_ad_series
-    calculate_wad = cauculate_williams_ad
+
+calculate_wad = williams_ad
