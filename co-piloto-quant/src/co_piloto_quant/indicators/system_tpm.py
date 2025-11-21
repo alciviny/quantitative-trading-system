@@ -31,7 +31,7 @@ def calculate_system_tpm(
 
     # Calcula o indicador base
     if indicator == 'obtr':
-        indicator_series = on_balance_true_range(data)['OBTR']
+        indicator_series = on_balance_true_range(data)['obtr']
         indicator_series.name = 'obtr'
     elif indicator == 'wad':
         indicator_series = williams_ad(data)

@@ -57,8 +57,13 @@ def plot_system_tpm(fig, data, params, indicator_name, row):
         'rgba(0, 255, 0, 0.15)'      # 0.45 - Normalidade (Verde)
     ]
 
+    # Esta função retorna um dataframe com o indicador + bandas, causando conflito.
     system_df = calculate_system_tpm(data, indicator=indicator_name, period=system_period, deviations=system_deviations)
-    data = data.join(system_df)
+    
+    # SOLUÇÃO: Juntar apenas as colunas de bandas (que são novas) e descartar
+    # a coluna do indicador duplicada que veio do system_df.
+    band_columns = [col for col in system_df.columns if col != indicator_name]
+    data = data.join(system_df[band_columns])
 
     # Plota as bandas de fora para dentro
     for i, dev in enumerate(system_deviations):
@@ -101,6 +106,7 @@ def visualize(args):
     if 'wad' in args.indicators:
         wad_df = williams_ad(data)
         data = data.join(wad_df)
+
 
     # --- Setup de Plotagem Dinâmica ---
     
@@ -153,17 +159,29 @@ def visualize(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualizador Flexível de Indicadores Técnicos.")
-    
+
     # Argumentos gerais
     parser.add_argument("--ticker", type=str, default="PETR4.SA", help="O ticker do ativo a ser analisado (ex: PETR4.SA).")
-    
-    # Seleção de indicadores
+
+    # Seleção de indicadores (agora opcional)
     parser.add_argument(
-        "indicators", 
-        nargs='+', 
-        choices=['price', 'ifr', 'obtr', 'wad'], 
-        help="Uma lista de indicadores para exibir (ex: 'price obtr wad')."
+        "indicators",
+        nargs='*',  # Permite zero ou mais indicadores
+        choices=['price', 'ifr', 'obtr', 'wad'],
+        help="Lista opcional de indicadores para exibir. Se omitido, mostra o gráfico padrão."
     )
 
     # Parâmetros para os indicadores
-    parser.add_argument("--bb_period", type=int, default=200, help="Período
+    parser.add_argument("--bb_period", type=int, default=200, help="Período para as Bandas de Bollinger de preço.")
+    parser.add_argument("--bb_std_dev", type=float, default=2.0, help="Desvio padrão para as Bandas de Bollinger de preço.")
+    parser.add_argument("--ifr_period", type=int, default=120, help="Período para o cálculo do IFR.")
+    parser.add_argument("--system_period", type=int, default=21, help="Período para as bandas do System TPM.")
+
+    args = parser.parse_args()
+
+    # Se nenhum indicador for fornecido, usa a visualização padrão
+    if not args.indicators:
+        print("Nenhum indicador especificado, usando visualização padrão: price, ifr, obtr, wad")
+        args.indicators = ['price', 'ifr', 'obtr', 'wad']
+
+    visualize(args)
