@@ -68,3 +68,4 @@ def on_balance_true_range(data: pd.DataFrame) -> pd.DataFrame:
     obtr = (tr * price_direction).cumsum()
 
     return pd.DataFrame({'OBTR': obtr}, index=data.index)
+calculate_obtr = on_balance_true_range
