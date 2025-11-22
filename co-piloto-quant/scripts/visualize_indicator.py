@@ -1,17 +1,26 @@
+from co_piloto_quant.config import (
+    PROCESSED_DATA_PATH,
+    BB_PERIOD,
+    BB_STD_DEV,
+    IFR_PERIOD,
+    SYSTEM_PERIOD,
+)
 import argparse
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
-import os
-import sys
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+import logging
 
 from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
 from co_piloto_quant.indicators.ifr_tpm import calculate_ifr_tpm
 from co_piloto_quant.indicators.system_tpm import calculate_system_tpm
 from co_piloto_quant.indicators.on_balance_true_range import on_balance_true_range
 from co_piloto_quant.indicators.williams_ad import williams_ad
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
 
 # --- Funções Auxiliares de Plotagem ---
 
@@ -83,12 +92,12 @@ def visualize(args):
     Gera e exibe um gráfico com uma seleção dinâmica de indicadores técnicos.
     """
     processed_filename = f"{args.ticker}_processed.csv"
-    processed_filepath = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src', 'co_piloto_quant', 'data', 'processed', processed_filename))
+    processed_filepath = PROCESSED_DATA_PATH / processed_filename
 
-    print(f"Carregando dados processados de: {processed_filepath}")
-    if not os.path.exists(processed_filepath):
-        print(f"ERRO: Arquivo de dados processados não encontrado em '{processed_filepath}'.")
-        print(f"Execute o pipeline primeiro com: python scripts/run_pipeline.py --ticker {args.ticker}")
+    logger.info(f"Carregando dados processados de: {processed_filepath}")
+    if not processed_filepath.exists():
+        logger.error(f"Arquivo de dados processados não encontrado em '{processed_filepath}'.")
+        logger.info(f"Execute o pipeline primeiro com: python scripts/run_pipeline.py --ticker {args.ticker}")
         return
 
     data = pd.read_csv(processed_filepath, index_col=0, parse_dates=True)
@@ -172,10 +181,10 @@ if __name__ == "__main__":
     )
 
     # Parâmetros para os indicadores
-    parser.add_argument("--bb_period", type=int, default=200, help="Período para as Bandas de Bollinger de preço.")
-    parser.add_argument("--bb_std_dev", type=float, default=2.0, help="Desvio padrão para as Bandas de Bollinger de preço.")
-    parser.add_argument("--ifr_period", type=int, default=120, help="Período para o cálculo do IFR.")
-    parser.add_argument("--system_period", type=int, default=21, help="Período para as bandas do System TPM.")
+    parser.add_argument("--bb_period", type=int, default=BB_PERIOD, help="Período para as Bandas de Bollinger de preço.")
+    parser.add_argument("--bb_std_dev", type=float, default=BB_STD_DEV, help="Desvio padrão para as Bandas de Bollinger de preço.")
+    parser.add_argument("--ifr_period", type=int, default=IFR_PERIOD, help="Período para o cálculo do IFR.")
+    parser.add_argument("--system_period", type=int, default=SYSTEM_PERIOD, help="Período para as bandas do System TPM.")
 
     args = parser.parse_args()
 

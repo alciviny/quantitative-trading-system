@@ -1,10 +1,6 @@
 import sys
-import os
 import argparse
 import pandas as pd
-
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
 from co_piloto_quant.data.data_fetching import fetch_data
 from co_piloto_quant.data.data_processing import process_data
