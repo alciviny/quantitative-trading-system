@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+import pandera as pa
+from pandera.errors import SchemaError
 from co_piloto_quant.indicators.ww_moving_average import ww_moving_average
 
 def bollinger_bands(data: pd.DataFrame, column: str = 'close', period: int = 200, std_devs: list = [2.0]) -> pd.DataFrame:
@@ -17,10 +19,18 @@ def bollinger_bands(data: pd.DataFrame, column: str = 'close', period: int = 200
         pd.DataFrame: DataFrame com a banda média, e as bandas superiores e inferiores.
 
     Raises:
-        ValueError: Se a coluna de preço não for encontrada.
+        ValueError: Se a coluna de preço não for encontrada ou os dados forem inválidos.
     """
-    if column not in data.columns:
-        raise ValueError(f"Column '{column}' not found in the input DataFrame. Found: {data.columns.tolist()}")
+    try:
+        schema = pa.DataFrameSchema(
+            {
+                column: pa.Column(float, required=True, coerce=True)
+            },
+            strict=False,  # Permite outras colunas no DataFrame
+        )
+        schema.validate(data)
+    except SchemaError as e:
+        raise ValueError(f"A validação dos dados de entrada falhou para a coluna '{column}'. Verifique se a coluna existe e contém dados numéricos. Erro original: {e}")
 
     
     middle_band = ww_moving_average(data, column=column, period=period)

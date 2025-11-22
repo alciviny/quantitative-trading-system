@@ -1,18 +1,13 @@
 import pandas as pd
 import pandas_ta as ta
-import os
-import sys
 
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-
-from co_piloto_quant.data.data_processing import PROCESSED_DATA_PATH
+from co_piloto_quant.config import PROCESSED_DATA_PATH
 from co_piloto_quant.indicators.williams_ad import williams_ad
 
 def load_processed_data(ticker: str) -> pd.DataFrame:
   
-    file_path = os.path.join(PROCESSED_DATA_PATH, f"{ticker}_processed.csv")
-    if not os.path.exists(file_path):
+    file_path = PROCESSED_DATA_PATH / f"{ticker}_processed.csv"
+    if not file_path.exists():
         print(f"Arquivo de dados processados não encontrado para {ticker} em {file_path}")
         return pd.DataFrame()
     
