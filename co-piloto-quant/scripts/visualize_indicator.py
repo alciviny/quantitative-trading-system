@@ -4,6 +4,9 @@ from co_piloto_quant.config import (
     BB_STD_DEV,
     IFR_PERIOD,
     SYSTEM_PERIOD,
+    STOCH_K_PERIOD,
+    STOCH_D_PERIOD,
+    STOCH_K_SMOOTH,
 )
 import argparse
 import plotly.graph_objects as go
@@ -16,6 +19,7 @@ from co_piloto_quant.indicators.ifr_tpm import calculate_ifr_tpm
 from co_piloto_quant.indicators.system_tpm import calculate_system_tpm
 from co_piloto_quant.indicators.on_balance_true_range import on_balance_true_range
 from co_piloto_quant.indicators.williams_ad import williams_ad
+from co_piloto_quant.indicators.stochastic_custom import calculate_stochastic_custom
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -50,6 +54,20 @@ def plot_ifr(fig, data, params, row):
     fig.add_hline(y=50, line_width=1, line_dash="dash", line_color="red", row=row, col=1)
     
     fig.update_yaxes(title_text="IFR", row=row, col=1)
+    return data
+
+def plot_stochastic_custom(fig, data, params, row):
+    """Plota o Estocástico Lento Customizado."""
+    stoch_df = calculate_stochastic_custom(data)
+    data = data.join(stoch_df)
+
+    fig.add_trace(go.Scatter(x=data.index, y=data['stoch_k_80_3'], mode='lines', name='%K Lento', line=dict(color='blue')), row=row, col=1)
+    fig.add_trace(go.Scatter(x=data.index, y=data['stoch_d_14'], mode='lines', name='%D (Sinal)', line=dict(color='red', dash='dash')), row=row, col=1)
+    
+    fig.add_hline(y=80, line_width=1, line_dash="dash", line_color="gray", row=row, col=1)
+    fig.add_hline(y=20, line_width=1, line_dash="dash", line_color="gray", row=row, col=1)
+
+    fig.update_yaxes(title_text="Estocástico", row=row, col=1, range=[0, 100])
     return data
 
 def plot_system_tpm(fig, data, params, indicator_name, row):
@@ -123,6 +141,7 @@ def visualize(args):
     plotter_map = {
         'price': (plot_price, 'Preço & Bandas de Bollinger'),
         'ifr': (plot_ifr, 'IFR'),
+        'stoch_custom': (plot_stochastic_custom, 'Estocástico Lento Customizado'),
         'obtr': (lambda fig, data, params, row: plot_system_tpm(fig, data, params, 'obtr', row), 'System TPM sobre OBTR'),
         'wad': (lambda fig, data, params, row: plot_system_tpm(fig, data, params, 'wad', row), 'System TPM sobre WAD'),
     }
@@ -176,7 +195,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "indicators",
         nargs='*',  # Permite zero ou mais indicadores
-        choices=['price', 'ifr', 'obtr', 'wad'],
+        choices=['price', 'ifr', 'obtr', 'wad', 'stoch_custom'],
         help="Lista opcional de indicadores para exibir. Se omitido, mostra o gráfico padrão."
     )
 
@@ -185,12 +204,14 @@ if __name__ == "__main__":
     parser.add_argument("--bb_std_dev", type=float, default=BB_STD_DEV, help="Desvio padrão para as Bandas de Bollinger de preço.")
     parser.add_argument("--ifr_period", type=int, default=IFR_PERIOD, help="Período para o cálculo do IFR.")
     parser.add_argument("--system_period", type=int, default=SYSTEM_PERIOD, help="Período para as bandas do System TPM.")
-
+    parser.add_argument("--stoch_k_period", type=int, default=STOCH_K_PERIOD, help="Período K para o Estocástico.")
+    parser.add_argument("--stoch_k_smooth", type=int, default=STOCH_K_SMOOTH, help="Suavização do %K para o Estocástico.")
+    parser.add_argument("--stoch_d_period", type=int, default=STOCH_D_PERIOD, help="Período D para o Estocástico.")
     args = parser.parse_args()
 
     # Se nenhum indicador for fornecido, usa a visualização padrão
     if not args.indicators:
-        print("Nenhum indicador especificado, usando visualização padrão: price, ifr, obtr, wad")
-        args.indicators = ['price', 'ifr', 'obtr', 'wad']
+        print("Nenhum indicador especificado, usando visualização padrão: price, ifr, obtr, wad, stoch_custom")
+        args.indicators = ['price', 'ifr', 'obtr', 'wad', 'stoch_custom']
 
     visualize(args)

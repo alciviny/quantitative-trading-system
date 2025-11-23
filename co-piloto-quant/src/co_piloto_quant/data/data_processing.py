@@ -7,6 +7,7 @@ from ..indicators.williams_ad import calculate_wad
 from ..indicators.ifr_tpm import calculate_ifr_tpm
 from ..indicators.bollinger_bands import bollinger_bands
 from ..indicators.multi_bollinger_bands import multi_bollinger_bands
+from ..indicators.stochastic_custom import calculate_stochastic_custom
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,6 +20,7 @@ INDICATOR_FUNCTIONS = {
     'ifr': calculate_ifr_tpm,
     'bbands': bollinger_bands,
     'multi_bbands': multi_bollinger_bands,
+    'stoch_custom': calculate_stochastic_custom,
 }
 
 def process_data(raw_data: pd.DataFrame, ticker: str, indicators: list = None) -> pd.DataFrame:
