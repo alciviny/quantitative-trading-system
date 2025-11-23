@@ -4,7 +4,7 @@ Este arquivo serve como um guia rápido para executar as principais funcionalida
 
 ## Fluxo de Trabalho Padrão
 
-O fluxo consiste em duas etapas principais: primeiro, processar os dados de um ativo e, em seguida, visualizar a análise no dashboard.
+O fluxo consiste em duas etapas principais: primeiro, processar os dados de um ativo e, em seguida, visualizar a análise.
 
 ---
 
@@ -13,22 +13,45 @@ O fluxo consiste em duas etapas principais: primeiro, processar os dados de um a
 Este comando baixa os dados brutos do mercado, realiza a limpeza e os cálculos necessários, e salva o resultado em um arquivo `.csv` na pasta de dados processados.
 
 **Comando:**
-`python scripts/run_pipeline.py --ticker SEU_ATIVO`
+`python scripts/run_pipeline.py --ticker SEU_ATIVO.SA`
 
 **Exemplo Prático:**
 Para processar os dados da Vale (VALE3), use:
 `python scripts/run_pipeline.py --ticker VALE3.SA`
+
 ---
 
-### Etapa 2: Visualizar o Dashboard de Análise
+### Etapa 2: Visualizar a Análise
 
-Após gerar os dados na Etapa 1, este comando carrega esses dados e exibe o painel de análise técnica com gráficos e indicadores.
+Após gerar os dados na Etapa 1, você tem duas opções para visualização.
 
-**Importante:** Certifique-se de usar o mesmo ticker da Etapa 1.
+#### Opção A: Dashboard Padrão
+
+Este comando carrega os dados processados e exibe o painel de análise técnica padrão.
 
 **Comando:**
-`python scripts/run_dashboard.py --ticker SEU_ATIVO`
+`python scripts/run_dashboard.py --ticker SEU_ATIVO.SA`
 
 **Exemplo Prático:**
-Para visualizar a análise da Vale (VALE3), use:
 `python scripts/run_dashboard.py --ticker VALE3.SA`
+
+---
+#### Opção B: Visualização Flexível de Indicadores
+
+Este script permite gerar um gráfico com uma combinação personalizada de indicadores. É útil para análises mais focadas.
+
+**Comando Base:**
+`python scripts/visualize_indicator.py --ticker SEU_ATIVO.SA [INDICADOR_1] [INDICADOR_2] ...`
+
+**Argumentos:**
+- `--ticker`: Define o ativo a ser analisado (obrigatório).
+- `[INDICADORES]`: Lista opcional (separada por espaços) de indicadores a serem exibidos. Se omitido, todos os indicadores padrão serão mostrados.
+  - Opções disponíveis: `price`, `ifr`, `obtr`, `wad`, `stoch_custom`.
+
+**Exemplos Práticos:**
+
+1.  **Visualização padrão para PETR4.SA (todos os indicadores):**
+    `python scripts/visualize_indicator.py --ticker PETR4.SA`
+
+2.  **Visualizar apenas o Preço e o Estocástico para VALE3.SA:**
+    `python scripts/visualize_indicator.py --ticker VALE3.SA price stoch_custom`
