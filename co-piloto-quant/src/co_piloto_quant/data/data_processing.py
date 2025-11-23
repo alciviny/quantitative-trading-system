@@ -4,9 +4,9 @@ from co_piloto_quant.config import PROCESSED_DATA_PATH
 from .data_fetching import fetch_data_from_csv
 from ..indicators.on_balance_true_range import calculate_obtr
 from ..indicators.williams_ad import calculate_wad
-from ..indicators.ifr_tpm import calculate_ifr
-from ..indicators.bollinger_bands import calculate_bollinger_bands
-from ..indicators.multi_bollinger_bands import calculate_multi_bollinger_bands
+from ..indicators.ifr_tpm import calculate_ifr_tpm
+from ..indicators.bollinger_bands import bollinger_bands
+from ..indicators.multi_bollinger_bands import multi_bollinger_bands
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 INDICATOR_FUNCTIONS = {
     'obtr': calculate_obtr,
     'wad': calculate_wad,
-    'ifr': calculate_ifr,
-    'bbands': calculate_bollinger_bands,
-    'multi_bbands': calculate_multi_bollinger_bands,
+    'ifr': calculate_ifr_tpm,
+    'bbands': bollinger_bands,
+    'multi_bbands': multi_bollinger_bands,
 }
 
 def process_data(raw_data: pd.DataFrame, ticker: str, indicators: list = None) -> pd.DataFrame:
