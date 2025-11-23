@@ -33,6 +33,11 @@ IFR_PERIOD = 120
 # Período para o System TPM
 SYSTEM_PERIOD = 21
 
+# Parâmetros para o Estocástico Lento Customizado
+STOCH_K_PERIOD = 80  # Período para o cálculo do %K Bruto
+STOCH_D_PERIOD = 14  # Período para a suavização do %D (linha de sinal)
+STOCH_K_SMOOTH = 3   # Período para a suavização do %K (transformando-o em %K Lento)
+
 
 if __name__ == '__main__':
     # Este bloco é útil para depuração, para verificar se os caminhos estão corretos.
