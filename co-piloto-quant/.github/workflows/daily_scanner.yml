@@ -1,0 +1,69 @@
+
+# Nome do Workflow
+name: 'Daily Market Scanner'
+
+# Gatilhos (Triggers)
+on:
+  # Permite a execução manual pela interface do GitHub Actions
+  workflow_dispatch:
+
+  # Agenda a execução para 21:00 UTC, de Segunda a Sexta-feira
+  schedule:
+    - cron: '0 21 * * 1-5'
+
+# Definição dos Jobs
+jobs:
+  daily_scan:
+    runs-on: ubuntu-latest
+    
+    # Permissões necessárias para que o job possa fazer push no repositório
+    permissions:
+      contents: write
+
+    steps:
+      # 1. Faz o checkout do código do repositório
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Configura o ambiente Python
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # 3. Instala as dependências do projeto
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+          # Instala o pacote co-piloto-quant em modo editável
+          pip install -e .
+
+      # 4. Executa o script de alerta
+      - name: Run Alert Scanner
+        env:
+          # Passa os secrets do GitHub para o script como variáveis de ambiente
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python co-piloto-quant/scripts/run_alert.py
+
+      # 5. Etapa para garantir a contribuição (Green Dot)
+      - name: Commit Last Run Timestamp
+        run: |
+          # Configura o usuário e email do Git para o commit
+          git config --global user.name 'GitHub Actions Bot'
+          git config --global user.email 'github-actions-bot@github.com'
+          
+          # Cria/Atualiza um arquivo com a data e hora da execução
+          echo "Last scan run at: $(date -u)" > last_run.txt
+          
+          # Adiciona, commita e faz o push do arquivo
+          git add last_run.txt
+          
+          # Commita apenas se houver mudanças no arquivo
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: Update last run timestamp"
+            git push
+          else
+            echo "No changes to commit."
+          fi
