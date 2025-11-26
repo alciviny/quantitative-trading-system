@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import pandera as pa
+import pandera.pandas as pa
 from pandera.errors import SchemaError
 from co_piloto_quant.indicators.ww_moving_average import ww_moving_average
 
