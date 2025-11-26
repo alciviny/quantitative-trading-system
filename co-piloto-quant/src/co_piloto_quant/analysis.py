@@ -2,14 +2,13 @@
 
 import pandas as pd
 import pandas_ta as ta
-from pathlib import Path
-import argparse
 from co_piloto_quant.config import PROCESSED_DATA_PATH
 
 # Imports da arquitetura do projeto
 from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
 from co_piloto_quant.indicators.stochastic_custom import calculate_stochastic_custom
 from co_piloto_quant.indicators.system_tpm import calculate_system_tpm
+from co_piloto_quant.indicators.ww_moving_average import ww_moving_average
 
 def load_processed_data(ticker: str) -> pd.DataFrame:
     """Carrega os dados processados de um arquivo CSV."""
@@ -22,147 +21,164 @@ def load_processed_data(ticker: str) -> pd.DataFrame:
     df = pd.read_csv(file_path, index_col=0, parse_dates=True)
     return df
 
+def safe_join(df_original: pd.DataFrame, df_new: pd.DataFrame) -> pd.DataFrame:
+    """
+    Função auxiliar para fazer join apenas das colunas que ainda não existem.
+    Evita o erro 'columns overlap but no suffix specified'.
+    """
+    cols_to_use = df_new.columns.difference(df_original.columns)
+    return df_original.join(df_new[cols_to_use])
+
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Calcula todos os indicadores técnicos focados na estratégia de "Entrada em Compressão".
+    Calcula todos os indicadores técnicos necessários para as novas regras.
     """
     # Se o DataFrame não tiver dados suficientes para a maior janela (200), retorne vazio.
     if len(df) < 200:
-        print(f"AVISO: Dados insuficientes para calcular indicadores de 200 períodos. O DataFrame tem {len(df)} linhas.")
         return pd.DataFrame()
+
+    # 0. Garante Tendência Macro (WWMA_200) se ainda não existir
+    if 'WWMA_200' not in df.columns:
+        df['WWMA_200'] = ww_moving_average(df, period=200, column='close')
 
     # 1. IFR (RSI) com período 120
     df['IFR_120'] = ta.rsi(df['close'], length=120)
 
-    # 2. Bandas de Bollinger com múltiplos desvios padrão (0.75 e 2.0)
-    #    Usando a função customizada do projeto que padroniza os nomes das colunas.
+    # 2. Bandas de Bollinger de PREÇO
+    #    Adicionamos os desvios 0.45 e 1.0 conforme solicitado nas novas regras
     try:
-        bb_df = bollinger_bands(df, period=200, std_devs=[0.75, 2.0])
-        df = df.join(bb_df)
+        bb_df = bollinger_bands(df, period=200, std_devs=[0.45, 1.0])
+        df = safe_join(df, bb_df)
     except Exception as e:
         print(f"ERRO ao calcular Bandas de Bollinger: {e}")
         return pd.DataFrame()
 
     # 3. Oscilador: Estocástico Customizado
-    stoch_df = calculate_stochastic_custom(df)
-    df = df.join(stoch_df)
+    try:
+        stoch_df = calculate_stochastic_custom(df)
+        df = safe_join(df, stoch_df)
+    except Exception as e:
+        print(f"ERRO ao calcular Estocástico: {e}")
 
-    # 4. System TPM com OBTR
-    obtr_tpm = calculate_system_tpm(df, indicator='obtr')
-    df = df.join(obtr_tpm)
+    # 4. System TPM com OBTR (Bandas 0.45, 1.0, 1.5, 2.0 já são padrão)
+    try:
+        obtr_tpm = calculate_system_tpm(df, indicator='obtr')
+        df = safe_join(df, obtr_tpm)
+    except Exception as e:
+        print(f"ERRO ao calcular System TPM (OBTR): {e}")
 
-    # 5. System TPM com WAD
-    wad_tpm = calculate_system_tpm(df, indicator='wad')
-    df = df.join(wad_tpm)
+    # 5. System TPM com WAD (Bandas 0.45, 1.0, 1.5, 2.0 já são padrão)
+    try:
+        wad_tpm = calculate_system_tpm(df, indicator='wad')
+        df = safe_join(df, wad_tpm)
+    except Exception as e:
+        print(f"ERRO ao calcular System TPM (WAD): {e}")
     
     return df
 
 def check_rules(latest_data: pd.Series) -> dict:
     """
-    Verifica as regras da estratégia "Entrada em Compressão" e retorna um dicionário
-    detalhado com todos os passos para depuração.
+    Verifica as novas regras da estratégia (Potencial Alta, Baixa, Squeeze, etc).
     """
-    # Nomes de colunas padronizados e seguros, gerados pela função customizada
     period = 200
     
-    # Bandas estreitas (0.75) para o filtro de compressão
-    bb_lower_squeeze_col = f'BB_Lower_{period}_0.75'
-    bb_upper_squeeze_col = f'BB_Upper_{period}_0.75'
-    
-    # Bandas largas (2.0) ficam disponíveis para checagens futuras (ex: "preço caro/barato")
-    # bb_lower_wide_col = f'BB_Lower_{period}_2.0'
-    # bb_upper_wide_col = f'BB_Upper_{period}_2.0'
+    # --- Mapeamento de Colunas ---
+    # Tendência Macro
+    wwma_200 = 'WWMA_200'
 
-    # Nomes das colunas do System TPM
-    obtr_middle_col = 'obtr_bb_middle_band'
-    wad_middle_col = 'wad_bb_middle_band'
+    # Bandas de Preço (std 1.0 e 0.45)
+    # Nota: A função bollinger_bands usa o float no nome (ex: 1.0)
+    bb_upper_1_0 = f'BB_Upper_{period}_1.0'
+    bb_lower_1_0 = f'BB_Lower_{period}_1.0'
+    bb_upper_0_45 = f'BB_Upper_{period}_0.45'
+    bb_lower_0_45 = f'BB_Lower_{period}_0.45'
     
-    # Nome da coluna do Estocástico
-    stoch_k_col = 'stoch_k_80_3'
+    # System TPM (OBTR e WAD)
+    # Nota: A função multi_bollinger_bands substitui ponto por underline (ex: 0_45)
+    obtr_mid = 'obtr_bb_middle_band'
+    wad_mid = 'wad_bb_middle_band'
     
-    # --- Verificação de Regras ---
+    obtr_upper_0_45 = 'obtr_bb_upper_band_0_45'
+    obtr_lower_0_45 = 'obtr_bb_lower_band_0_45'
     
-    # 1. Filtro de Consolidação
-    ifr_consolidado = (latest_data['IFR_120'] >= 45) & (latest_data['IFR_120'] <= 55)
+    wad_upper_0_45 = 'wad_bb_upper_band_0_45'
+    wad_lower_0_45 = 'wad_bb_lower_band_0_45'
     
-    # Preço em compressão (squeeze) usando as bandas de 0.75 desvio padrão
-    preco_em_compressao = (latest_data['close'] < latest_data[bb_upper_squeeze_col]) & \
-                          (latest_data['close'] > latest_data[bb_lower_squeeze_col])
-                          
-    filtro_consolidacao = ifr_consolidado & preco_em_compressao
+    # Osciladores
+    stoch_k = 'stoch_k_80_3'
+    ifr = 'IFR_120'
 
-    # 2. Condições de Força
-    forca_compradora = (latest_data['obtr'] > latest_data[obtr_middle_col]) or \
-                       (latest_data['wad'] > latest_data[wad_middle_col])
-    forca_vendedora = (latest_data['obtr'] < latest_data[obtr_middle_col]) or \
-                      (latest_data['wad'] < latest_data[wad_middle_col])
+    # Verifica colunas essenciais
+    required_cols = [bb_upper_1_0, bb_lower_1_0, stoch_k, ifr, 'close', 'obtr', 'wad', wwma_200]
+    missing = [c for c in required_cols if c not in latest_data]
+    if missing:
+        raise KeyError(f"Colunas ausentes para verificação: {missing}")
 
-    # 3. Condições de Gatilho do Oscilador
-    gatilho_compra = latest_data[stoch_k_col] < 40
-    gatilho_venda = latest_data[stoch_k_col] > 60
+    # --- LÓGICA DAS REGRAS ---
 
-    # 4. Combinação dos sinais
-    sinal_compra = filtro_consolidacao & forca_compradora & gatilho_compra
-    sinal_venda = filtro_consolidacao & forca_vendedora & gatilho_venda
+    # 1. Potencial Alta
+    # Preço dentro do desvio 1.0
+    preco_dentro_1_0 = (latest_data['close'] <= latest_data[bb_upper_1_0]) & \
+                       (latest_data['close'] >= latest_data[bb_lower_1_0])
+    # OBTR > Media200 E/OU Williams > Media200
+    fluxo_alta = (latest_data['obtr'] > latest_data[obtr_mid]) | \
+                 (latest_data['wad'] > latest_data[wad_mid])
+    # Estocástico < 50
+    stoch_alta = latest_data[stoch_k] < 50
+    # Preço acima da Média de 200 para confirmar tendência
+    tendencia_alta = latest_data['close'] > latest_data[wwma_200]
+    
+    potencial_alta = preco_dentro_1_0 & fluxo_alta & stoch_alta & tendencia_alta
 
+    # 2. Potencial Baixa
+    # Preço dentro do desvio 1.0 (já calculado acima)
+    # OBTR < Media200 E/OU Williams < Media200
+    fluxo_baixa = (latest_data['obtr'] < latest_data[obtr_mid]) | \
+                  (latest_data['wad'] < latest_data[wad_mid])
+    # Estocástico > 50
+    stoch_baixa = latest_data[stoch_k] > 50
+    # Preço abaixo da Média de 200 para confirmar tendência
+    tendencia_baixa = latest_data['close'] < latest_data[wwma_200]
+    
+    potencial_baixa = preco_dentro_1_0 & fluxo_baixa & stoch_baixa & tendencia_baixa
+
+    # 3. Potencial Squeeze (Compressão Extrema)
+    # Preço dentro do desvio 0.45
+    preco_squeeze = (latest_data['close'] <= latest_data[bb_upper_0_45]) & \
+                    (latest_data['close'] >= latest_data[bb_lower_0_45])
+    
+    # Williams dentro do desvio 0.45
+    wad_squeeze = (latest_data['wad'] <= latest_data[wad_upper_0_45]) & \
+                  (latest_data['wad'] >= latest_data[wad_lower_0_45])
+    
+    # E/OU OBTR dentro do desvio 0.45
+    obtr_squeeze = (latest_data['obtr'] <= latest_data[obtr_upper_0_45]) & \
+                   (latest_data['obtr'] >= latest_data[obtr_lower_0_45])
+                   
+    potencial_squeeze = preco_squeeze & (wad_squeeze | obtr_squeeze)
+
+    # 4. Potencial Squeeze IFR Alta
+    ifr_neutro = (latest_data[ifr] >= 48) & (latest_data[ifr] <= 52)
+    squeeze_ifr_alta = ifr_neutro & (latest_data[stoch_k] < 30)
+
+    # 5. Potencial Squeeze IFR Baixa
+    squeeze_ifr_baixa = ifr_neutro & (latest_data[stoch_k] > 70)
+
+    # Para compatibilidade com o scanner, definimos Sinal_Compra e Sinal_Venda
+    # baseados nas regras de Potencial Alta/Baixa
     return {
-        # Sinais Finais
-        'Sinal_Compra': bool(sinal_compra),
-        'Sinal_Venda': bool(sinal_venda),
+        # Sinais Principais (usados pelo scanner para classificar Compra/Venda)
+        'Sinal_Compra': bool(potencial_alta),
+        'Sinal_Venda': bool(potencial_baixa),
         
-        # Etapas Intermediárias para Depuração
-        'Filtro_Consolidacao': bool(filtro_consolidacao),
-        'IFR_Consolidado': bool(ifr_consolidado),
-        'Preco_Em_Compressao': bool(preco_em_compressao),
-        'Forca_Compradora': bool(forca_compradora),
-        'Forca_Vendedora': bool(forca_vendedora),
-        'Gatilho_Compra': bool(gatilho_compra),
-        'Gatilho_Venda': bool(gatilho_venda),
+        # Sinais Específicos para o Relatório Detalhado
+        'Potencial_Alta': bool(potencial_alta),
+        'Potencial_Baixa': bool(potencial_baixa),
+        'Potencial_Squeeze': bool(potencial_squeeze),
+        'Squeeze_IFR_Alta': bool(squeeze_ifr_alta),
+        'Squeeze_IFR_Baixa': bool(squeeze_ifr_baixa),
+        
+        # Variaveis de Debug
+        'Filtro_Consolidacao': bool(preco_dentro_1_0), # Reutilizando nome para compatibilidade visual
+        'Preco_Em_Compressao': bool(preco_squeeze)     # Reutilizando nome para compatibilidade visual
     }
-
-def main():
-    """
-    Função principal para rodar a análise de um ticker.
-    """
-    parser = argparse.ArgumentParser(description="Script de análise de indicadores para um ativo.")
-    parser.add_argument('--ticker', type=str, default="PETR4.SA", help='O ticker do ativo a ser analisado (ex: PETR4.SA).')
-    args = parser.parse_args()
-    ticker = args.ticker
-
-    df = load_processed_data(ticker)
-    if df.empty:
-        print(f"Não foram encontrados dados para {ticker}.")
-        return
-
-    # Usamos .copy() para garantir que não afetamos o dataframe original
-    df_with_indicators = calculate_indicators(df.copy())
-    
-    if df_with_indicators.empty:
-        print(f"Cálculo de indicadores falhou para {ticker}. Abortando.")
-        return
-
-    latest_data = df_with_indicators.iloc[-1]
-    
-    rules_check = check_rules(latest_data)
-    
-    print(f"\nAnálise para {ticker} em {latest_data.name.date()}:")
-    print("-" * 30)
-    
-    # Colunas relevantes para debug, incluindo as novas bandas de bollinger
-    cols_to_show = [
-        'close', 'IFR_120', 'stoch_k_80_3', 
-        f'BB_Lower_200_0.75', f'BB_Upper_200_0.75', 
-        f'BB_Lower_200_2.0', f'BB_Upper_200_2.0',
-        'obtr', 'wad'
-    ]
-    # Filtra colunas que realmente existem no dataframe para evitar KeyErrors no print
-    cols_to_show_existing = [col for col in cols_to_show if col in df_with_indicators.columns]
-    print(df_with_indicators[cols_to_show_existing].tail())
-    
-    print("\nVerificação das Regras:")
-    for rule, result in rules_check.items():
-        status = "SIM [✓]" if result else "NÃO [X]"
-        print(f"- {rule:<30}: {status}")
-
-if __name__ == "__main__":
-    main()
