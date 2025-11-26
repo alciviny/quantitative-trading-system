@@ -123,24 +123,20 @@ def check_rules(latest_data: pd.Series) -> dict:
     # OBTR > Media200 E/OU Williams > Media200
     fluxo_alta = (latest_data['obtr'] > latest_data[obtr_mid]) | \
                  (latest_data['wad'] > latest_data[wad_mid])
-    # Estocástico < 50
-    stoch_alta = latest_data[stoch_k] < 50
     # Preço acima da Média de 200 para confirmar tendência
     tendencia_alta = latest_data['close'] > latest_data[wwma_200]
     
-    potencial_alta = preco_dentro_1_0 & fluxo_alta & stoch_alta & tendencia_alta
+    potencial_alta = preco_dentro_1_0 & fluxo_alta & tendencia_alta
 
     # 2. Potencial Baixa
     # Preço dentro do desvio 1.0 (já calculado acima)
     # OBTR < Media200 E/OU Williams < Media200
     fluxo_baixa = (latest_data['obtr'] < latest_data[obtr_mid]) | \
                   (latest_data['wad'] < latest_data[wad_mid])
-    # Estocástico > 50
-    stoch_baixa = latest_data[stoch_k] > 50
     # Preço abaixo da Média de 200 para confirmar tendência
     tendencia_baixa = latest_data['close'] < latest_data[wwma_200]
     
-    potencial_baixa = preco_dentro_1_0 & fluxo_baixa & stoch_baixa & tendencia_baixa
+    potencial_baixa = preco_dentro_1_0 & fluxo_baixa & tendencia_baixa
 
     # 3. Potencial Squeeze (Compressão Extrema)
     # Preço dentro do desvio 0.45
