@@ -1,6 +1,9 @@
 import pandas as pd
 import pandas_ta as ta
-from co_piloto_quant.config import PROCESSED_DATA_PATH
+from co_piloto_quant.config import (PROCESSED_DATA_PATH, STOCH_K_PERIOD,
+                                    STOCH_K_SMOOTH, STOCH_D_SMOOTH,
+                                    SYSTEM_PERIOD, SYSTEM_DEVIATIONS,
+                                    BB_PERIOD, PRICE_BB_DEVIATIONS)
 
 # Imports da arquitetura do projeto
 from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
@@ -40,9 +43,9 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # 1. IFR (RSI) 120
     df['IFR_120'] = ta.rsi(df['close'], length=120)
 
-    # 2. Bandas de Bollinger de PREÇO (0.45 e 1.0)
+    # 2. Bandas de Bollinger de PREÇO
     try:
-        bb_df = bollinger_bands(df, period=200, std_devs=[0.45, 1.0])
+        bb_df = bollinger_bands(df, period=BB_PERIOD, std_devs=PRICE_BB_DEVIATIONS)
         df = safe_join(df, bb_df)
     except Exception as e:
         print(f"ERRO ao calcular Bandas de Bollinger: {e}")
@@ -50,17 +53,22 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     # 3. Oscilador: Estocástico Customizado
     try:
-        stoch_df = calculate_stochastic_custom(df)
+        stoch_df = calculate_stochastic_custom(
+            df,
+            k_period=STOCH_K_PERIOD,
+            k_smooth=STOCH_K_SMOOTH,
+            d_smooth=STOCH_D_SMOOTH
+        )
         df = safe_join(df, stoch_df)
     except Exception as e:
         print(f"ERRO ao calcular Estocástico: {e}")
 
     # 4. System TPM (OBTR e WAD)
     try:
-        obtr_tpm = calculate_system_tpm(df, indicator='obtr')
+        obtr_tpm = calculate_system_tpm(df, indicator='obtr', period=SYSTEM_PERIOD, deviations=SYSTEM_DEVIATIONS)
         df = safe_join(df, obtr_tpm)
         
-        wad_tpm = calculate_system_tpm(df, indicator='wad')
+        wad_tpm = calculate_system_tpm(df, indicator='wad', period=SYSTEM_PERIOD, deviations=SYSTEM_DEVIATIONS)
         df = safe_join(df, wad_tpm)
     except Exception as e:
         print(f"ERRO TPM: {e}")
@@ -93,13 +101,13 @@ def check_rules(latest_data: pd.Series) -> dict:
     wad_lower_0_45 = 'wad_bb_lower_band_0_45'
     
     # Osciladores
-    stoch_k = 'stoch_k_80_3'
+    stoch_k = f'stoch_k_{STOCH_K_PERIOD}_{STOCH_K_SMOOTH}'
     ifr = 'IFR_120'
 
     # Verifica integridade
-    required_cols = [bb_upper_1_0, bb_lower_1_0, 'close', 'obtr', 'wad', wwma_200]
-    if any(col not in latest_data for col in required_cols):
-        return {} # Retorna vazio se faltar dados críticos
+    required_cols = [bb_upper_1_0, bb_lower_1_0, 'close', 'obtr', 'wad', wwma_200, stoch_k]
+    if any(col not in latest_data or pd.isna(latest_data[col]) for col in required_cols):
+        return {} # Retorna vazio se faltar dados críticos ou se houver NaN
 
     # =========================================================================
     # LÓGICA DAS REGRAS (ATUALIZADA)

@@ -25,18 +25,21 @@ PROCESSED_DATA_PATH.mkdir(parents=True, exist_ok=True)
 
 # Parâmetros para Bandas de Bollinger de Preço
 BB_PERIOD = 200
-BB_STD_DEV = 2.0
+# Desvios para as Bandas de Bollinger de PREÇO
+# Inclui 0.45 (Squeeze), 1.0 (Consolidação), 1.5 e 2.0 (Alvos/Exaustão)
+PRICE_BB_DEVIATIONS = [0.45, 1.0, 1.5, 2.0]
 
 # Período para o IFR (Índice de Força Relativa)
 IFR_PERIOD = 120
 
 # Período para o System TPM
-SYSTEM_PERIOD = 21
+SYSTEM_PERIOD = 200
+SYSTEM_DEVIATIONS = [0.45, 1.0, 1.5, 2.0]
 
 # Parâmetros para o Estocástico Lento Customizado
-STOCH_K_PERIOD = 80  # Período para o cálculo do %K Bruto
-STOCH_D_PERIOD = 14  # Período para a suavização do %D (linha de sinal)
-STOCH_K_SMOOTH = 3   # Período para a suavização do %K (transformando-o em %K Lento)
+STOCH_K_PERIOD = 80  # Janela de lookback
+STOCH_K_SMOOTH = 3   # Suavização do %K (Média Simples)
+STOCH_D_SMOOTH = 3   # Suavização do %D (Linha de Sinal - Média Simples)
 
 
 if __name__ == '__main__':
