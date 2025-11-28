@@ -1,80 +1,165 @@
+import streamlit as st
 import pandas as pd
-from datetime import datetime
-from co_piloto_quant.analysis import calculate_indicators, check_rules, load_processed_data
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import sys
+from pathlib import Path
 
-def run_analysis(asset: str, timeframe: str, rsi_period: int) -> dict:
-   
-    dados = load_processed_data(ticker=asset)
-    print(f"Total de dados carregados: {len(dados)} candles")
+# --- Configuração de Caminhos ---
+current_dir = Path(__file__).resolve().parent
+project_root = current_dir.parent / "src"
+sys.path.append(str(project_root))
 
-    if dados.empty:
-        return {"success": False, "error": f"Não foi possível obter dados para o ativo '{asset}'. Execute o pipeline de dados primeiro."}
+from co_piloto_quant.config import PROCESSED_DATA_PATH
+from co_piloto_quant.analysis import load_processed_data, check_rules
 
-    dados_com_indicadores = calculate_indicators(dados, rsi_period=rsi_period)
+# Importando indicadores (Reaproveitando sua lógica existente)
+from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
+from co_piloto_quant.indicators.system_tpm import calculate_system_tpm
 
-    if 'RSI' not in dados_com_indicadores.columns or dados_com_indicadores['RSI'].isna().all():
-        error_msg = (
-            f"[ERRO] Não foi possível calcular o IFR (RSI) para o período {rsi_period}. "
-            f"Dados disponíveis: {len(dados)} candles. "
-            "Tente um período de IFR menor ou um timeframe maior."
-        )
-        return {"success": False, "error": error_msg}
+# --- Configuração da Página ---
+st.set_page_config(page_title="Co-Piloto Quant Pro", layout="wide", page_icon="📊")
 
-    ultimo_candle = dados_com_indicadores.iloc[-1]
-    resultados_regras = check_rules(ultimo_candle)
-    
-   
-    dashboard_data = {
-        "success": True,
-        "asset": asset,
-        "timeframe": timeframe,
-        "rsi_period": rsi_period,
-        "ultimo_rsi": ultimo_candle['RSI'],
-        "resultados_regras": resultados_regras,
-        "regras_ativas": sum(resultados_regras.values()),
-        "total_regras": len(resultados_regras),
-        "debug_df": dados_com_indicadores[['close', 'RSI']] 
+# --- CSS Customizado para dar ar profissional ---
+st.markdown("""
+<style>
+    .stMetric {
+        background-color: #1E1E1E;
+        padding: 10px;
+        border-radius: 5px;
+        border: 1px solid #333;
     }
-    return dashboard_data
+    .big-font {
+        font-size: 20px !important;
+        font-weight: bold;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-def display_dashboard(data: dict):
-  
-    print("\n" + "="*40)
-    print(f"--- Dashboard de Confirmação: {data['asset']} ({data['timeframe']}) ---")
-    print(f"Período IFR: {data['rsi_period']}")
-    print("="*40)
+# --- Barra Lateral (Controles) ---
+st.sidebar.title("🎛️ Painel de Controle")
 
-    for regra, ativada in data['resultados_regras'].items():
-        status = "SIM [✓]" if ativada else "NÃO [X]"
-        print(f"[ ] {regra:<18}: {status}")
+# 1. Seletor de Ativo
+try:
+    files = list(PROCESSED_DATA_PATH.glob("*_processed.csv"))
+    tickers = [f.name.replace("_processed.csv", "") for f in files]
+    if not tickers:
+        st.error("Nenhum dado encontrado. Rode o pipeline primeiro.")
+        st.stop()
+    selected_ticker = st.sidebar.selectbox("Escolha o Ativo:", tickers)
+except Exception as e:
+    st.error(f"Erro ao ler arquivos: {e}")
+    st.stop()
 
-    print("------------------------------------------")
-    print(f"RESUMO: {data['regras_ativas']} de {data['total_regras']} regras ativas.")
-    print("------------------------------------------\n")
+# 2. Configurações Dinâmicas (Isso o seu script antigo não tinha fácil!)
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚙️ Ajuste Fino")
+periodo_bb = st.sidebar.slider("Período Bollinger/Médias", 20, 300, 200)
+desvio_bb = st.sidebar.number_input("Desvio Padrão", 1.0, 3.0, 2.0, 0.1)
+ver_bandas_sistema = st.sidebar.checkbox("Ver Bandas de Fluxo (TPM)", value=True)
 
+# --- Corpo Principal ---
+st.title(f"📊 Análise Quantitativa: {selected_ticker}")
 
-import argparse
+df = load_processed_data(selected_ticker)
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Dashboard de Análise Técnica de Ativos.")
-    parser.add_argument("--ticker", type=str, required=True, help="O ticker do ativo a ser analisado (ex: PETR4.SA).")
+if df.empty:
+    st.error("Arquivo vazio.")
+else:
+    # Recalcula indicadores visuais baseados nos sliders (Interatividade!)
+    # Nota: Estamos recalculando apenas visualmente, as regras do analysis.py usam o padrão do config
+    df_visual = df.copy()
     
-    args = parser.parse_args()
+    # Validação de Regras (Usando o último candle)
+    last_row = df.iloc[-1]
+    # Aqui chamamos sua função de check_rules que já valida tudo
+    regras = check_rules(last_row)
 
+    # --- Painel de Status (Topo) ---
+    col1, col2, col3, col4 = st.columns(4)
     
-    TIMEFRAME = "1d"
-    RSI_PERIOD = 120 
+    with col1:
+        st.metric("Preço Atual", f"R$ {last_row['close']:.2f}")
     
-  
-    analysis_result = run_analysis(args.ticker, TIMEFRAME, RSI_PERIOD)
-    
-    # 2. Se a análise for bem-sucedida, exibe os resultados
-    if analysis_result["success"]:
-        print("\nÚltimos 5 candles com indicadores:")
-        print(analysis_result['debug_df'].tail())
-        print(f"\nO valor do último IFR calculado é: {analysis_result['ultimo_rsi']:.2f}")
+    with col2:
+        # Lógica de cor para o status
+        status_compra = "SIM" if regras.get('Sinal_Compra') else "NÃO"
+        cor_compra = "off" if not regras.get('Sinal_Compra') else "normal"
+        st.metric("Sinal de COMPRA", status_compra, delta="Potencial Alta" if regras.get('Sinal_Compra') else None)
+
+    with col3:
+        status_venda = "SIM" if regras.get('Sinal_Venda') else "NÃO"
+        st.metric("Sinal de VENDA", status_venda, delta_color="inverse", delta="-Potencial Baixa" if regras.get('Sinal_Venda') else None)
+
+    with col4:
+        squeeze = "ALERTA" if regras.get('Potencial_Squeeze') else "Normal"
+        st.metric("Volatilidade", squeeze, delta="Explosão Iminente" if regras.get('Potencial_Squeeze') else None, delta_color="off")
+
+    # --- Visualização Gráfica (Plotly) ---
+    # Setup de Subplots (Preço + Fluxo + IFR)
+    fig = make_subplots(
+        rows=3, cols=1, 
+        shared_xaxes=True, 
+        vertical_spacing=0.03, 
+        row_heights=[0.6, 0.2, 0.2],
+        subplot_titles=("Ação do Preço & Estrutura", "Fluxo (OBTR/WAD)", "Oscilador (IFR)")
+    )
+
+    # 1. Gráfico de Preço (Candles)
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+        name="OHLC"
+    ), row=1, col=1)
+
+    # Média Móvel (Interativa pelo Slider)
+    mm_col = f'WWMA_{periodo_bb}' # Se não existir, teria que calcular, mas vamos usar a 200 fixa ou calcular on-the-fly
+    # Para simplificar a visualização, vamos plotar a 200 fixa do arquivo ou calcular simples aqui
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df['close'].ewm(span=periodo_bb).mean(), 
+        line=dict(color='orange', width=2), name=f"Média {periodo_bb}"
+    ), row=1, col=1)
+
+    # Bandas de Bollinger Visuais
+    if 'BB_Upper_200_2.0' in df.columns: # Usando as processadas
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df['BB_Upper_200_2.0'], 
+            line=dict(color='gray', width=1, dash='dot'), showlegend=False
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df['BB_Lower_200_2.0'], 
+            line=dict(color='gray', width=1, dash='dot'), name="Bollinger (Padrão)",
+            fill='tonexty', fillcolor='rgba(128,128,128,0.1)'
+        ), row=1, col=1)
+
+    # 2. Gráfico de Fluxo (TPM)
+    if 'obtr' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['obtr'], line=dict(color='#00FF00', width=1), name="OBTR (Fluxo)"), row=2, col=1)
         
-        display_dashboard(analysis_result)
-    else:
-        print(f"\n[FALHA NA ANÁLISE] {analysis_result['error']}")
-        print("Por favor, execute 'python scripts/run_pipeline.py --ticker SEU_ATIVO' para gerar os dados necessários.")
+        # Bandas do System TPM (Visualização rica que você fez no outro script)
+        if ver_bandas_sistema and 'obtr_bb_upper_band_0_45' in df.columns:
+             fig.add_trace(go.Scatter(x=df.index, y=df['obtr_bb_upper_band_0_45'], line=dict(width=0), showlegend=False), row=2, col=1)
+             fig.add_trace(go.Scatter(x=df.index, y=df['obtr_bb_lower_band_0_45'], line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 255, 0, 0.1)', name="Zona de Fluxo"), row=2, col=1)
+
+    # 3. Gráfico de IFR
+    if 'IFR_120' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['IFR_120'], line=dict(color='cyan', width=1.5), name="IFR 120"), row=3, col=1)
+        fig.add_hline(y=50, line_dash="dash", line_color="white", opacity=0.3, row=3, col=1)
+        fig.add_hrect(y0=48, y1=52, fillcolor="white", opacity=0.1, layer="below", line_width=0, row=3, col=1)
+
+    # Layout Final
+    fig.update_layout(
+        height=800,
+        xaxis_rangeslider_visible=False,
+        template="plotly_dark",
+        margin=dict(l=10, r=10, t=30, b=10),
+        legend=dict(orientation="h", y=1, x=0)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- Debug Area ---
+    with st.expander("🕵️ Detalhes das Regras (Debug)"):
+        st.write("Estado das variáveis no último candle:")
+        st.json(regras)
+        st.write("Dados Brutos (Últimos 5 dias):")
+        st.dataframe(df.tail(5))
