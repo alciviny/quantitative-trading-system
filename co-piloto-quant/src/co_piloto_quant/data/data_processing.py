@@ -7,51 +7,48 @@ import pandas as pd
 import logging
 from typing import Dict, Any, Callable
 
-# --- IMPORTAÇÕES EXPLÍCITAS (CORREÇÃO DE BUG) ---
-# Importamos diretamente de cada arquivo para garantir que o Python encontre as funções
-# mesmo que elas não estejam no __init__.py
+# --- IMPORTAÇÕES DOS INDICADORES ---
 from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
 from co_piloto_quant.indicators.ifr_tpm import calculate_ifr_tpm
 from co_piloto_quant.indicators.stochastic_custom import calculate_stochastic_custom
 from co_piloto_quant.indicators.system_tpm import calculate_system_tpm
 from co_piloto_quant.indicators.ww_moving_average import ww_moving_average
 
+# Importa as configurações para garantir consistência
+from co_piloto_quant.config import (
+    BB_PERIOD, 
+    PRICE_BB_DEVIATIONS, 
+    IFR_PERIOD,
+    SYSTEM_PERIOD
+)
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Mapeamento Sincronizado com a Estratégia (analysis.py) ---
+# --- Mapeamento Sincronizado com a Estratégia ---
 INDICATOR_MAPPING: Dict[str, Dict[str, Any]] = {
-    # Bandas de Preço (Para Squeeze e Volatilidade)
     "bollinger_bands": {
         "function": bollinger_bands,
-        # A estratégia pede periodo 200 e desvio 0.75 para o squeeze
-        "params": {"period": 200, "std_devs": [0.75, 2.0]}
+        "params": {
+            "period": BB_PERIOD, 
+            "std_devs": PRICE_BB_DEVIATIONS 
+        }
     },
-    
-    # Indicador de Momento (Longo Prazo)
     "ifr_tpm": {
         "function": calculate_ifr_tpm,
-        "params": {"period": 120}
+        "params": {"period": IFR_PERIOD}
     },
-    
-    # Oscilador para Gatilhos (Stoch K 80, 3)
     "stochastic_custom": {
         "function": calculate_stochastic_custom,
         "params": {} 
     },
-    
-    # System TPM - Baseado em OBTR
     "system_tpm_obtr": {
         "function": calculate_system_tpm,
-        "params": {"indicator": "obtr", "period": 200}
+        "params": {"indicator": "obtr", "period": SYSTEM_PERIOD}
     },
-
-    # System TPM - Baseado em WAD
     "system_tpm_wad": {
         "function": calculate_system_tpm,
-        "params": {"indicator": "wad", "period": 200}
+        "params": {"indicator": "wad", "period": SYSTEM_PERIOD}
     },
-    
-    # Tendência Macro (WWMA 200)
     "ww_moving_average": {
         "function": ww_moving_average,
         "params": {"period": 200}
@@ -69,12 +66,25 @@ def process_data(data: pd.DataFrame, ticker: str = None) -> pd.DataFrame:
 
     processed_data = data.copy()
     processed_data.columns = processed_data.columns.str.lower()
+    
+    # --- LIMPEZA CRÍTICA (CORREÇÃO DA ESTICADA) ---
+    # 1. Remove NaNs iniciais
     processed_data.dropna(inplace=True)
     
-    # Calcula retorno diário (útil para métricas futuras)
+    # 2. Remove preços zerados ou negativos (Bug comum do yfinance no último candle)
+    # Isso evita que o gráfico desenhe uma linha até o zero.
+    cols_to_check = ['open', 'high', 'low', 'close']
+    for col in cols_to_check:
+        if col in processed_data.columns:
+            processed_data = processed_data[processed_data[col] > 0]
+            
+    # ---------------------------------------------
+    
+    # Calcula retorno diário
     if 'close' in processed_data.columns:
         processed_data['daily_return'] = processed_data['close'].pct_change()
-        processed_data.dropna(inplace=True)
+        # Remove a primeira linha que fica NaN após o cálculo do retorno
+        processed_data.dropna(subset=['daily_return'], inplace=True)
 
     if processed_data.empty:
         return processed_data
@@ -87,12 +97,9 @@ def process_data(data: pd.DataFrame, ticker: str = None) -> pd.DataFrame:
             func: Callable = config["function"]
             params: Dict = config["params"]
             
-            # Executa a função do indicador
             result = func(processed_data, **params)
             
-            # Tratamento robusto do retorno (DataFrame ou Series)
             if isinstance(result, pd.DataFrame):
-                # Evita duplicidade de colunas no join
                 cols_to_use = result.columns.difference(processed_data.columns)
                 processed_data = processed_data.join(result[cols_to_use])
             elif isinstance(result, pd.Series):
@@ -103,5 +110,9 @@ def process_data(data: pd.DataFrame, ticker: str = None) -> pd.DataFrame:
         except Exception as e:
             logging.error(f"Erro no indicador '{name}'{log_ticker}: {e}")
             continue
+
+    # Limpeza Final: Remove linhas que ficaram com NaN por causa do período dos indicadores
+    # (Ex: As primeiras 200 linhas costumam ficar vazias por causa da Média Móvel 200)
+    processed_data.dropna(inplace=True)
 
     return processed_data

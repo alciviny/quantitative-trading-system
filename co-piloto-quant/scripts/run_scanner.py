@@ -5,6 +5,7 @@ import logging
 from tqdm import tqdm
 
 # Importações do projeto
+from co_piloto_quant.config import PROCESSED_DATA_PATH  # <--- Importante para salvar
 from co_piloto_quant.data.data_fetching import fetch_batch_data
 from co_piloto_quant.data.database import load_price_data
 from co_piloto_quant.utils import get_top_50_tickers
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 def run_scanner():
     """
-    Executa o scanner de mercado e gera relatórios detalhados para cada setup.
+    Executa o scanner de mercado, gera relatórios e SALVA os dados para o Dashboard.
     """
     tickers = get_top_50_tickers()
     logger.info(f"Scanner iniciado para {len(tickers)} tickers.")
@@ -35,18 +36,25 @@ def run_scanner():
 
     debug_results = []
 
-    logger.info("Carregando do Banco de Dados e analisando...")
+    logger.info("Carregando do Banco de Dados, analisando e salvando para Dashboard...")
     
     # 2. Análise Ativo por Ativo
-    for ticker in tqdm(tickers, desc="Analisando Ativos"):
+    for ticker in tqdm(tickers, desc="Processando Ativos"):
         try:
             raw_df = load_price_data(ticker)
             if raw_df.empty: continue
 
+            # Calcula indicadores
             processed_df = process_data(raw_df, ticker)
             df_with_indicators = calculate_indicators(processed_df)
 
             if df_with_indicators.empty: continue
+
+            # --- NOVO: SALVA O ARQUIVO PARA O DASHBOARD ---
+            # Isso cria o arquivo que o Streamlit precisa para mostrar o gráfico
+            file_path = PROCESSED_DATA_PATH / f"{ticker}_processed.csv"
+            df_with_indicators.to_csv(file_path)
+            # ---------------------------------------------
 
             latest_data = df_with_indicators.iloc[-1]
             if latest_data.isnull().any(): continue
@@ -58,7 +66,6 @@ def run_scanner():
                 continue
 
             # --- Coleta Dados para o Relatório ---
-            # Junta as flags (True/False) com os valores numéricos
             debug_info = {'Ticker': ticker, **rules_check}
             debug_info['Preço'] = latest_data.get('close')
             debug_info['IFR_120'] = latest_data.get('IFR_120')
@@ -73,11 +80,11 @@ def run_scanner():
 
     # --- RELATÓRIOS ---
     pd.set_option('display.float_format', lambda x: f'{x:.2f}')
-    pd.set_option('display.max_rows', None) # Mostrar todas as linhas
-    pd.set_option('display.expand_frame_repr', False) # Não quebrar linhas
+    pd.set_option('display.max_rows', None) 
+    pd.set_option('display.expand_frame_repr', False) 
 
     print("\n" + "="*80)
-    print(f"      RAIO-X DETALHADO DO MERCADO ({len(debug_results)} ativos analisados)")
+    print(f"      RAIO-X DETALHADO DO MERCADO ({len(debug_results)} ativos processados)")
     print("="*80)
 
     if not debug_results:
@@ -86,35 +93,29 @@ def run_scanner():
 
     df = pd.DataFrame(debug_results)
 
-    # Função auxiliar para imprimir grupos
     def print_group(title, condition_col, show_cols=['Ticker', 'Preço', 'Stoch_K', 'IFR_120']):
         subset = df[df[condition_col] == True]
         print(f"\n>> {title} (Total: {len(subset)})")
         if not subset.empty:
-            # Ordena pela coluna Stoch_K se ela estiver na lista de exibição, senão por Ticker.
             sort_by_col = 'Stoch_K' if 'Stoch_K' in show_cols else 'Ticker'
             print(subset[show_cols].sort_values(by=sort_by_col).to_string(index=False))
         else:
             print("   - Nenhum ativo encontrado.")
 
-    # 1. Relatório de Consolidação e Squeeze (Preço)
     print("\n--- 1. CONSOLIDAÇÃO & SQUEEZE ---")
-    print_group("ATIVOS EM CONSOLIDAÇÃO (Preço dentro da Banda 1.0)", 'Filtro_Consolidacao')
-    print_group("POTENCIAL SQUEEZE (Preço e Indicador dentro da Banda 0.45)", 'Potencial_Squeeze', 
-                show_cols=['Ticker', 'Preço', 'WAD', 'OBTR'])
+    print_group("ATIVOS EM CONSOLIDAÇÃO", 'Filtro_Consolidacao')
+    print_group("POTENCIAL SQUEEZE", 'Potencial_Squeeze', show_cols=['Ticker', 'Preço', 'WAD', 'OBTR'])
 
-    # 2. Relatório de Setups Específicos de IFR
     print("\n--- 2. SETUPS DE IFR (Squeeze) ---")
-    print_group("SQUEEZE IFR ALTA (IFR Neutro + Stoch < 30)", 'Squeeze_IFR_Alta')
-    print_group("SQUEEZE IFR BAIXA (IFR Neutro + Stoch > 70)", 'Squeeze_IFR_Baixa')
+    print_group("SQUEEZE IFR ALTA", 'Squeeze_IFR_Alta')
+    print_group("SQUEEZE IFR BAIXA", 'Squeeze_IFR_Baixa')
 
-    # 3. Relatório de Sinais Principais (Potencial Alta/Baixa)
-    print("\n--- 3. SINAIS DIRECIONAIS (Alta/Baixa) ---")
-    print_group("POTENCIAL ALTA (Preço em 1.0 + Fluxo Positivo + Stoch < 50)", 'Potencial_Alta')
-    print_group("POTENCIAL BAIXA (Preço em 1.0 + Fluxo Negativo + Stoch > 50)", 'Potencial_Baixa')
+    print("\n--- 3. SINAIS DIRECIONAIS ---")
+    print_group("POTENCIAL ALTA", 'Potencial_Alta')
+    print_group("POTENCIAL BAIXA", 'Potencial_Baixa')
 
     print("\n" + "="*80)
-    print("FIM DO RELATÓRIO")
+    print("Processamento concluído. Abra o Dashboard para visualizar os gráficos.")
     print("="*80)
 
 if __name__ == "__main__":
