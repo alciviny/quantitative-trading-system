@@ -95,8 +95,8 @@ else:
 
     # --- NOVO CARD PARA O HURST ---
     with col5:
-        # Tenta pegar o valor do Hurst
-        hurst_val = last_row.get('Hurst_100_detrended_price', 0.5)
+        # Pega o valor do Hurst diretamente do dicionário de regras para consistência
+        hurst_val = regras.get('Hurst_Score', 0.5)
         
         # Define o texto do regime
         if hurst_val > 0.6:
@@ -197,7 +197,7 @@ else:
         fig.add_hline(y=80, line_dash="dash", line_color="gray", opacity=0.5, row=4, col=1)
 
     # 5. HURST EXPONENT (Row 5) - NOVO BLOCO
-    col_hurst = 'Hurst_100_detrended_price' # Nome definido no analysis.py
+    col_hurst = 'Hurst_72_returns' # Nome da coluna CORRIGIDO
     
     if col_hurst in df.columns:
         # Plota a Linha do Hurst
