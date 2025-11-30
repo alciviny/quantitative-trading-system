@@ -80,6 +80,12 @@ def run_scanner():
             hurst_val = latest_data.get('Hurst_72_returns', 0.5)
             debug_info['Hurst'] = hurst_val
             
+            # Adiciona Half-Life e R² da reversão à média
+            half_life = rules_check.get('Half_Life_Val', 1000)
+            ou_r2 = rules_check.get('OU_R2', 0.0)
+            debug_info['Half_Life'] = half_life
+            debug_info['OU_R2'] = ou_r2
+
             debug_results.append(debug_info)
 
         except Exception as e:
@@ -138,8 +144,13 @@ def run_scanner():
     # 4. CANDIDATOS TÉCNICOS (SEM FILTRO)
     # Usa 'Potencial_Alta_Tecnico'
     print("\n--- 4. CANDIDATOS TÉCNICOS (SEM VALIDAÇÃO DE REGIME) ---")
-    print_group("SETUP ALTA (Técnico Puro)", 'Potencial_Alta_Tecnico', show_cols=['Ticker', 'Preço', 'Hurst'])
-    print_group("SETUP BAIXA (Técnico Puro)", 'Potencial_Baixa_Tecnico', show_cols=['Ticker', 'Preço', 'Hurst'])
+    print_group("SETUP ALTA (Técnico Puro)", 'Potencial_Alta_Tecnico', show_cols=['Ticker', 'Preço', 'Hurst', 'Half_Life', 'OU_R2'])
+    print_group("SETUP BAIXA (Técnico Puro)", 'Potencial_Baixa_Tecnico', show_cols=['Ticker', 'Preço', 'Hurst', 'Half_Life', 'OU_R2'])
+
+    # 5. SINAIS ESPECIAIS (Estratégias Alternativas)
+    print("\n--- 5. SINAIS ESPECIAIS (Estratégias Alternativas) ---")
+    print_group("OPORTUNIDADE OURO (Pullback Sniper)", 'Sinal_Pullback_Sniper', 
+                show_cols=['Ticker', 'Preço', 'Hurst', 'Half_Life', 'OU_R2'])
 
     print("\n" + "="*80)
     print("Processamento concluído.")
