@@ -5,6 +5,8 @@ from co_piloto_quant.config import (PROCESSED_DATA_PATH, STOCH_K_PERIOD,
                                      SYSTEM_PERIOD, SYSTEM_DEVIATIONS,
                                      BB_PERIOD, PRICE_BB_DEVIATIONS)
 
+# Procure a linha antiga e mude para:
+from co_piloto_quant.indicators.special.half_life import calculate_rolling_ou_params
 from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
 from co_piloto_quant.indicators.stochastic_custom import calculate_stochastic_custom
 from co_piloto_quant.indicators.system_tpm import calculate_system_tpm
@@ -47,6 +49,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df = safe_join(df, stoch_df)
     except Exception as e:
         print(f"ERRO Stoch: {e}")
+        return pd.DataFrame()
 
     try:
         obtr_tpm = calculate_system_tpm(df, indicator='obtr', period=SYSTEM_PERIOD, deviations=SYSTEM_DEVIATIONS)
@@ -55,6 +58,7 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df = safe_join(df, wad_tpm)
     except Exception as e:
         print(f"ERRO TPM: {e}")
+        return pd.DataFrame()
 
     # Hurst Exponent (Janela 72, Returns)
     try:
@@ -62,8 +66,28 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df = safe_join(df, pd.DataFrame(hurst))
     except Exception as e:
         print(f"ERRO Hurst: {e}")
+        return pd.DataFrame()
+    
+    # ... Dentro de calculate_indicators ...
+
+# --- NOVO BLOCO OU/HALF-LIFE INSTITUCIONAL ---
+    try:
+    # Retorna DataFrame com Beta, HalfLife, R2, t_Beta...
+        ou_stats = calculate_rolling_ou_params(
+        df['close'], 
+        window=60, 
+        beta_floor=-0.02, 
+        strict_mode=False,
+        use_log=True
+    )
+        df = safe_join(df, ou_stats)
+    except Exception as e:
+        print(f"ERRO OU Params: {e}")
+        return pd.DataFrame()
+# ---------------------------------------------
     
     return df
+    
 
 def check_rules(latest_data: pd.Series) -> dict:
     period = 200
@@ -108,13 +132,33 @@ def check_rules(latest_data: pd.Series) -> dict:
     obtr_squeeze = (latest_data['obtr'] <= latest_data[obtr_upper_0_45]) & (latest_data['obtr'] >= latest_data[obtr_lower_0_45])
     potencial_squeeze = preco_squeeze & (wad_squeeze | obtr_squeeze)
 
-    ifr_neutro = (latest_data[ifr] >= 48) & (latest_data[ifr] <= 52)
+    ifr_val = latest_data.get(ifr, 50)
+    ifr_neutro = (ifr_val >= 48) & (ifr_val <= 52)
     squeeze_ifr_alta = ifr_neutro & (latest_data[stoch_k] < 30)
     squeeze_ifr_baixa = ifr_neutro & (latest_data[stoch_k] > 70)
 
     # 3. Filtragem Final
     sinal_compra_final = potencial_alta_tecnico and is_trending
     sinal_venda_final = potencial_baixa_tecnico and is_trending
+
+    # --- LÓGICA REFINADA ---
+
+    # Nomes das colunas (Sufixo _60 pois window=60)
+    hl_col = 'HalfLife_60'
+    r2_col = 'R2_60'
+
+    # Obter valores
+    hl_val = latest_data.get(hl_col, 1000)
+    r2_val = latest_data.get(r2_col, 0)
+
+    # 1. Pullback Sniper (Agora com Filtro de Qualidade)
+    # Half-Life curto (< 25) E fit de qualidade razoável (R2 > 5%)
+    # R2 muito baixo em Mean Reversion significa que a "força" da mola é aleatória.
+    cond_elasticidade = (hl_val < 25) and (r2_val > 0.05)
+
+    # ... (Resto das suas condições de IFR e Hurst) ...
+
+    sinal_pullback_sniper = cond_elasticidade and (hurst_val > 0.55) and (ifr_val < 48)
 
     return {
         'Sinal_Compra': bool(sinal_compra_final),
@@ -130,5 +174,9 @@ def check_rules(latest_data: pd.Series) -> dict:
         'Regime_Lateral': bool(is_mean_reversion),
         'Hurst_Score': float(hurst_val),
         'Filtro_Consolidacao': bool(preco_dentro_1_0),
-        'Preco_Em_Compressao': bool(preco_squeeze)
+        'Preco_Em_Compressao': bool(preco_squeeze),
+        'Sinal_Pullback_Sniper': bool(sinal_pullback_sniper),
+        'Half_Life_Val': float(hl_val),
+        'OU_R2': float(r2_val) # Útil para debug
     }
+
