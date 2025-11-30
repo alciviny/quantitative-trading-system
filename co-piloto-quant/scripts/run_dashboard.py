@@ -16,6 +16,8 @@ from co_piloto_quant.analysis import load_processed_data, check_rules
 # Importando indicadores (Reaproveitando sua lógica existente)
 from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
 from co_piloto_quant.indicators.system_tpm import calculate_system_tpm
+# ... outros imports
+from co_piloto_quant.config import PROCESSED_DATA_PATH, STOCH_K_PERIOD, STOCH_K_SMOOTH, STOCH_D_SMOOTH
 
 # --- Configuração da Página ---
 st.set_page_config(page_title="Co-Piloto Quant Pro", layout="wide", page_icon="📊")
@@ -96,13 +98,14 @@ else:
         st.metric("Volatilidade", squeeze, delta="Explosão Iminente" if regras.get('Potencial_Squeeze') else None, delta_color="off")
 
     # --- Visualização Gráfica (Plotly) ---
-    # Setup de Subplots (Preço + Fluxo + IFR)
+ # Setup de Subplots (Preço + Fluxo + IFR + Estocástico)
     fig = make_subplots(
-        rows=3, cols=1, 
+        rows=4, cols=1,  # <--- MUDAR PARA 4
         shared_xaxes=True, 
         vertical_spacing=0.03, 
-        row_heights=[0.6, 0.2, 0.2],
-        subplot_titles=("Ação do Preço & Estrutura", "Fluxo (OBTR/WAD)", "Oscilador (IFR)")
+        # Ajustando alturas: Preço maior, outros menores
+        row_heights=[0.50, 0.15, 0.15, 0.20], 
+        subplot_titles=("Ação do Preço & Estrutura", "Fluxo (OBTR/WAD)", "Oscilador (IFR)", "Estocástico (80,3,3)")
     )
 
     # 1. Gráfico de Preço (Candles)
@@ -140,15 +143,86 @@ else:
              fig.add_trace(go.Scatter(x=df.index, y=df['obtr_bb_upper_band_0_45'], line=dict(width=0), showlegend=False), row=2, col=1)
              fig.add_trace(go.Scatter(x=df.index, y=df['obtr_bb_lower_band_0_45'], line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 255, 0, 0.1)', name="Zona de Fluxo"), row=2, col=1)
 
+
+
+
+# 2. Gráfico de Fluxo (TPM)
+    # --- PLOT DO OBTR ---
+    if 'obtr' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['obtr'], line=dict(color='#00FF00', width=1), name="OBTR (Fluxo)"), row=2, col=1)
+        
+        if ver_bandas_sistema and 'obtr_bb_upper_band_0_45' in df.columns:
+             fig.add_trace(go.Scatter(x=df.index, y=df['obtr_bb_upper_band_0_45'], line=dict(width=0), showlegend=False), row=2, col=1)
+             fig.add_trace(go.Scatter(x=df.index, y=df['obtr_bb_lower_band_0_45'], line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 255, 0, 0.1)', name="Zona OBTR"), row=2, col=1)
+
+    # --- ADICIONAR ESTE BLOCO PARA O WILLIAMS (WAD) ---
+    if 'wad' in df.columns:
+        # Usando uma cor diferente (ex: amarelo ou magenta) para diferenciar
+        fig.add_trace(go.Scatter(x=df.index, y=df['wad'], line=dict(color='#FF00FF', width=1), name="Williams A/D"), row=2, col=1)
+        
+        # Opcional: Adicionar bandas do WAD se quiser visualizar também
+        if ver_bandas_sistema and 'wad_bb_upper_band_0_45' in df.columns:
+             fig.add_trace(go.Scatter(x=df.index, y=df['wad_bb_upper_band_0_45'], line=dict(width=0), showlegend=False), row=2, col=1)
+             fig.add_trace(go.Scatter(x=df.index, y=df['wad_bb_lower_band_0_45'], line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 0, 255, 0.1)', name="Zona WAD"), row=2, col=1)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     # 3. Gráfico de IFR
     if 'IFR_120' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['IFR_120'], line=dict(color='cyan', width=1.5), name="IFR 120"), row=3, col=1)
         fig.add_hline(y=50, line_dash="dash", line_color="white", opacity=0.3, row=3, col=1)
         fig.add_hrect(y0=48, y1=52, fillcolor="white", opacity=0.1, layer="below", line_width=0, row=3, col=1)
 
+
+
+
+# 4. Gráfico de Estocástico (NOVO BLOCO)
+    # Monta os nomes das colunas dinamicamente baseado no config
+    col_k = f'stoch_k_{STOCH_K_PERIOD}_{STOCH_K_SMOOTH}'
+    col_d = f'stoch_d_{STOCH_K_PERIOD}_{STOCH_K_SMOOTH}_{STOCH_D_SMOOTH}'
+
+    if col_k in df.columns:
+        # Linha K (Rápida) - Cor sólida vibrante
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df[col_k], 
+            line=dict(color='#E377C2', width=1.5), name="Stoch %K"
+        ), row=4, col=1)
+        
+        # Linha D (Sinal) - Tracejada
+        if col_d in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df.index, y=df[col_d], 
+                line=dict(color='white', width=1, dash='dot'), name="Stoch %D"
+            ), row=4, col=1)
+
+        # Linhas de Referência (20 e 80)
+        fig.add_hline(y=20, line_dash="dash", line_color="gray", opacity=0.5, row=4, col=1)
+        fig.add_hline(y=80, line_dash="dash", line_color="gray", opacity=0.5, row=4, col=1)
+        
+        # Opcional: Pintar zonas extremas
+        fig.add_hrect(y0=80, y1=100, fillcolor="red", opacity=0.1, line_width=0, row=4, col=1)
+        fig.add_hrect(y0=0, y1=20, fillcolor="green", opacity=0.1, line_width=0, row=4, col=1)
     # Layout Final
     fig.update_layout(
-        height=800,
+        height=1200,
         xaxis_rangeslider_visible=False,
         template="plotly_dark",
         margin=dict(l=10, r=10, t=30, b=10),
