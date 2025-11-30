@@ -4,54 +4,39 @@ Este arquivo serve como um guia rápido para executar as principais funcionalida
 
 ## Fluxo de Trabalho Padrão
 
-O fluxo consiste em duas etapas principais: primeiro, processar os dados de um ativo e, em seguida, visualizar a análise.
+O fluxo de trabalho moderno e recomendado consiste em duas etapas simples:
+
+1.  **Atualizar os Dados e Rodar o Scanner**: Um único comando para garantir que todos os dados de mercado estejam atualizados e para gerar a análise de todos os ativos.
+2.  **Visualizar no Dashboard Interativo**: Lançar o painel Streamlit para analisar os resultados de forma interativa.
 
 ---
 
-### Etapa 1: Gerar os Dados Processados
+### Etapa 1: Atualizar o Banco de Dados e Rodar o Scanner
 
-Este comando baixa os dados brutos do mercado, realiza a limpeza e os cálculos necessários, e salva o resultado em um arquivo `.csv` na pasta de dados processados.
+Este é o comando central do sistema. Ele faz o seguinte:
+- Baixa os dados mais recentes para **todos os ativos** listados no `config.py`.
+- Salva e atualiza os dados no banco de dados local (`market_data.db`).
+- Calcula todos os indicadores técnicos.
+- Aplica as regras de análise e gera o `score` para cada ativo.
+- Salva o resultado em `scanner_results.csv`.
 
 **Comando:**
-`python scripts/run_pipeline.py --ticker SEU_ATIVO.SA`
+`python scripts/run_scanner.py`
 
-**Exemplo Prático:**
-Para processar os dados da Vale (VALE3), use:
-`python scripts/run_pipeline.py --ticker VALE3.SA`
+**Importante:** Execute este comando diariamente antes de abrir o mercado para garantir que sua análise está baseada nos dados mais recentes.
 
 ---
 
-### Etapa 2: Visualizar a Análise
+### Etapa 2: Visualizar a Análise no Dashboard
 
-Após gerar os dados na Etapa 1, você tem duas opções para visualização.
+Após rodar o scanner, utilize o dashboard interativo para explorar os resultados.
 
-#### Opção A: Dashboard Padrão
+**Comando para lançar o dashboard:**
+`streamlit run run_streamlit.py`
 
-Este comando carrega os dados processados e exibe o painel de análise técnica padrão.
+**O que o dashboard oferece:**
+- Uma tabela com todos os ativos analisados, seu `score` e `Tendencia Macro`.
+- Filtros para encontrar rapidamente os ativos mais promissores (ex: score > 3).
+- Gráficos detalhados para cada ativo, mostrando o preço e os principais indicadores.
 
-**Comando:**
-`python scripts/run_dashboard.py --ticker SEU_ATIVO.SA`
-
-**Exemplo Prático:**
-`python scripts/run_dashboard.py --ticker VALE3.SA`
-
----
-#### Opção B: Visualização Flexível de Indicadores
-
-Este script permite gerar um gráfico com uma combinação personalizada de indicadores. É útil para análises mais focadas.
-
-**Comando Base:**
-`python scripts/visualize_indicator.py --ticker SEU_ATIVO.SA [INDICADOR_1] [INDICADOR_2] ...`
-
-**Argumentos:**
-- `--ticker`: Define o ativo a ser analisado (obrigatório).
-- `[INDICADORES]`: Lista opcional (separada por espaços) de indicadores a serem exibidos. Se omitido, todos os indicadores padrão serão mostrados.
-  - Opções disponíveis: `price`, `ifr`, `obtr`, `wad`, `stoch_custom`.
-
-**Exemplos Práticos:**
-
-1.  **Visualização padrão para PETR4.SA (todos os indicadores):**
-    `python scripts/visualize_indicator.py --ticker PETR4.SA`
-
-2.  **Visualizar apenas o Preço e o Estocástico para VALE3.SA:**
-    `python scripts/visualize_indicator.py --ticker VALE3.SA price stoch_custom`
+Este novo fluxo substitui os antigos scripts `run_pipeline.py` e `run_dashboard.py`, oferecendo uma maneira muito mais eficiente e poderosa de analisar o mercado.

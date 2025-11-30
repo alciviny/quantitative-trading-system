@@ -1,31 +1,46 @@
 # Arquitetura e Fluxo de Dados - Co-Piloto Quant
 
-Este documento detalha a arquitetura do fluxo de dados do sistema, desde a aquisição dos dados brutos até o seu processamento e utilização nos indicadores técnicos e estratégias de análise.
+Este documento detalha a arquitetura do fluxo de dados do sistema, desde a aquisição dos dados brutos até a sua visualização interativa.
 
 ## Visão Geral
 
 O fluxo de dados foi projetado para ser modular e desacoplado, seguindo as seguintes etapas:
 
 1.  **Coleta**: Dados de mercado (OHLCV) são baixados de uma fonte externa (Yahoo Finance).
-2.  **Armazenamento**: Os dados brutos são persistidos em um banco de dados local (SQLite) para acesso rápido e histórico, evitando downloads repetidos.
-3.  **Processamento**: Os dados são carregados em memória e enriquecidos com uma bateria de indicadores técnicos.
-4.  **Análise**: As estratégias e scanners utilizam os dados processados para identificar sinais e gerar alertas.
+2.  **Armazenamento**: Os dados brutos são persistidos em um banco de dados local (SQLite) para acesso rápido e histórico.
+3.  **Processamento**: Os dados são carregados, e os indicadores técnicos são calculados.
+4.  **Análise (Scanner)**: As regras são aplicadas, e um `score` é gerado para cada ativo.
+5.  **Visualização**: Um dashboard interativo (Streamlit) apresenta os resultados para análise.
 
 ```mermaid
 graph TD
-    A[Fontes Externas <br> (Yahoo Finance)] -->|yfinance| B(1. Coleta <br> `data_fetching.py`);
-    B -->|pandas DataFrame| C(2. Armazenamento <br> `database.py`);
-    C -->|INSERT OR REPLACE| D{Banco de Dados <br> `market_data.db`};
-    D -->|SELECT *| E(3. Processamento <br> `data_processing.py`);
-    E -->|Aplica Indicadores| F(4. Análise <br> `analysis.py`, `run_scanner.py`);
-    subgraph "Módulos de Indicadores (`/indicators`)"
-        G[bollinger_bands.py]
-        H[ifr_tpm.py]
-        I[...]
+    subgraph "Setup & Execução"
+        A[Fontes Externas <br> (Yahoo Finance)] -->|yfinance| B(1. Coleta <br> `data_fetching.py`);
+        B -->|pandas DataFrame| C(2. Armazenamento <br> `database.py`);
+        C -->|INSERT OR REPLACE| D{Banco de Dados <br> `market_data.db`};
     end
-    E --> G;
-    E --> H;
-    E --> I;
+
+    subgraph "Análise Diária"
+        E(run_scanner.py) -->|Carrega dados| D;
+        E -->|Calcula indicadores| F(3. Processamento <br> `data_processing.py`);
+        F -->|Aplica regras| G(4. Análise <br> `analysis.py`);
+        G -->|Gera score| H[scanner_results.csv];
+    end
+    
+    subgraph "Visualização Interativa"
+        I(run_streamlit.py) -->|Lê resultados| H;
+        I -->|Exibe dashboard| J((Dashboard Web));
+    end
+
+    subgraph "Módulos de Indicadores (`/indicators`)"
+        K[bollinger_bands.py]
+        L[ifr_tpm.py]
+        M[...]
+    end
+
+    F --> K;
+    F --> L;
+    F --> M;
 ```
 
 ---
@@ -33,49 +48,48 @@ graph TD
 ## Etapa 1: Coleta de Dados (`data_fetching.py`)
 
 -   **Responsabilidade**: Baixar dados históricos de mercado.
--   **Fonte**: A biblioteca `yfinance` é utilizada para se conectar à API do Yahoo Finance.
--   **Funções Chave**:
-    -   `fetch_data(ticker, ...)`: Busca dados para um único ativo.
-    -   `fetch_batch_data(tickers, ...)`: Otimizado para buscar dados de múltiplos ativos em paralelo.
--   **Processo**:
-    1.  Recebe uma lista de tickers (ex: `['PETR4.SA', 'VALE3.SA']`).
-    2.  Usa `yfinance.download()` para obter os dados de Open, High, Low, Close e Volume.
-    3.  Imediatamente após o download, os dados são passados para a camada de armazenamento para serem salvos.
+-   **Fonte**: Biblioteca `yfinance` para se conectar ao Yahoo Finance.
+-   **Processo**: O script `run_scanner.py` utiliza `data_fetching.py` para buscar dados de todos os ativos listados no `config.py` e os salva no banco de dados.
 
 ---
 
 ## Etapa 2: Armazenamento (`database.py`)
 
 -   **Responsabilidade**: Persistir e fornecer acesso aos dados brutos de mercado.
--   **Tecnologia**: SQLite, um banco de dados leve e baseado em arquivo. O banco de dados fica em `src/co_piloto_quant/data/market_data.db`.
--   **Estrutura (Schema)**:
-    1.  **`assets`**: Tabela que armazena informações sobre os ativos (ex: ticker, nome da empresa).
-    2.  **`ohlcv`**: Tabela principal que armazena os dados de preço e volume, com uma chave composta `(asset_id, date)` para garantir que não haja entradas duplicadas.
+-   **Tecnologia**: SQLite (`market_data.db`).
 -   **Funções Chave**:
-    -   `init_db()`: Cria o arquivo de banco de dados e as tabelas, caso não existam.
-    -   `save_price_data(ticker, data)`: Salva os dados de um ativo. Utiliza o comando `INSERT OR REPLACE INTO`, que atualiza um registro existente se ele já estiver no banco (baseado na chave primária), ou insere um novo caso contrário. Isso torna o processo de atualização de dados eficiente e idempotente.
-    -   `load_price_data(ticker)`: Carrega todos os dados históricos de um ativo do banco de dados para um `pandas.DataFrame`.
+    -   `save_price_data`: Usa `INSERT OR REPLACE` para salvar ou atualizar os dados de um ativo de forma eficiente.
+    -   `load_price_data`: Carrega os dados de um ativo do banco para a memória.
 
 ---
 
 ## Etapa 3: Processamento e Indicadores (`data_processing.py`)
 
--   **Responsabilidade**: Atuar como uma "calculadora". Este módulo orquestra a aplicação de indicadores técnicos sobre os dados brutos.
--   **Processo**:
-    1.  Recebe um DataFrame com dados OHLCV.
-    2.  Itera sobre o dicionário `INDICATOR_MAPPING`. Este dicionário é o coração do processamento, pois mapeia um nome de indicador para a função que o calcula e seus respectivos parâmetros.
-    3.  Para cada item no mapa, ele chama a função do indicador correspondente (localizada na pasta `/indicators`).
-    4.  O resultado (uma `pd.Series` ou `pd.DataFrame`) é juntado ao DataFrame original.
--   **Arquitetura**: Este módulo é "puro". Ele não tem estado e não se conecta a fontes externas. Sua única função é receber dados, calcular e devolver os dados enriquecidos. Isso o torna extremamente rápido e fácil de testar.
+-   **Responsabilidade**: "Calculadora" de indicadores técnicos.
+-   **Processo**: Recebe um DataFrame com dados OHLCV e aplica uma série de funções de indicadores (localizadas na pasta `/indicators`) para enriquecer os dados. É um módulo puro, sem conexões externas.
 
 ---
 
-## Etapa 4: Orquestração (`scripts/`)
+## Etapa 4: Análise e Orquestração (`run_scanner.py`)
 
--   **Responsabilidade**: Unir todas as camadas anteriores para executar tarefas de ponta a ponta.
--   **Exemplos**:
-    -   `run_pipeline.py`: Um script simples que demonstra o fluxo completo: ele busca os dados de um ativo (`fetch_data`), o que implicitamente os salva no banco, e em seguida os processa (`process_data`) para calcular todos os indicadores mapeados.
-    -   `run_scanner.py`: Carrega os dados já salvos no banco (`load_price_data`), calcula os indicadores (`process_data`) e, em seguida, aplica a lógica de `analysis.py` para encontrar ativos que correspondam a critérios específicos (sinais de compra/venda).
-    -   `teste_infra.py`: Um "smoke test" que verifica se todas as peças do quebra-cabeça estão funcionando corretamente: conexão com o banco, download de dados, e cálculo de todos os indicadores.
+-   **Responsabilidade**: Unir todas as camadas para executar a análise de mercado.
+-   **Processo**:
+    1.  Orquestra a coleta de dados para todos os ativos.
+    2.  Para cada ativo, carrega os dados do banco.
+    3.  Usa `data_processing.py` para calcular os indicadores.
+    4.  Usa `analysis.py` para aplicar as regras de negócio e calcular o `score`.
+    5.  Salva uma tabela resumo dos resultados no arquivo `scanner_results.csv`.
 
-Este design garante que cada parte do sistema tenha uma responsabilidade única, facilitando a manutenção, o teste e a adição de novas funcionalidades (como novos indicadores ou novas estratégias).
+---
+
+## Etapa 5: Visualização Interativa (`run_streamlit.py`)
+
+-   **Responsabilidade**: Fornecer uma interface de usuário rica e interativa para a análise dos resultados.
+-   **Tecnologia**: Streamlit.
+-   **Processo**:
+    1.  Iniciado com o comando `streamlit run run_streamlit.py`.
+    2.  Lê o arquivo `scanner_results.csv` para exibir a tabela de classificação dos ativos.
+    3.  Permite que o usuário filtre os ativos (por `score`, `Tendencia Macro`, etc.).
+    4.  Ao selecionar um ativo, o script carrega os dados completos do banco de dados, recalcula os indicadores em tempo real e exibe gráficos detalhados para uma análise visual aprofundada.
+
+Este design garante um fluxo de trabalho claro: `run_scanner.py` faz o trabalho pesado de processamento em lote, e o dashboard Streamlit foca em fornecer uma experiência de análise de dados rápida e interativa.
