@@ -77,7 +77,7 @@ def run_scanner():
             debug_info['Stoch'] = latest_data.get('stoch_k_80_3')
             
             # Busca a chave correta do Hurst (via get para segurança)
-            hurst_val = latest_data.get('Hurst_100_detrended_price', 0.5)
+            hurst_val = latest_data.get('Hurst_72_returns', 0.5)
             debug_info['Hurst'] = hurst_val
             
             debug_results.append(debug_info)
