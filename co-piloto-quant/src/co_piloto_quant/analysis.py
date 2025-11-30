@@ -11,6 +11,9 @@ from co_piloto_quant.indicators.stochastic_custom import calculate_stochastic_cu
 from co_piloto_quant.indicators.system_tpm import calculate_system_tpm
 from co_piloto_quant.indicators.ww_moving_average import ww_moving_average
 
+# --- NOVO IMPORT ---
+from co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
+
 def load_processed_data(ticker: str) -> pd.DataFrame:
     """Carrega os dados processados de um arquivo CSV."""
     file_path = PROCESSED_DATA_PATH / f"{ticker}_processed.csv"
@@ -72,17 +75,26 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df = safe_join(df, wad_tpm)
     except Exception as e:
         print(f"ERRO TPM: {e}")
+
+    # 5. Expoente de Hurst (Filtro de Regime) - ATUALIZADO
+    try:
+        # kind='detrended_price' remove a tendência linear local para analisar a "qualidade" do movimento
+        # Window=100 é o padrão estatístico robusto
+        hurst = calculate_rolling_hurst(df['close'], window=100, kind='detrended_price')
+        df = safe_join(df, pd.DataFrame(hurst))
+    except Exception as e:
+        print(f"ERRO ao calcular Hurst: {e}")
     
     return df
 
 def check_rules(latest_data: pd.Series) -> dict:
     """
     Verifica as regras da estratégia.
-    Atualização: Filtros de Estocástico REMOVIDOS para Alta e Baixa.
+    Atualização: Inclui Filtro de Regime via Hurst Exponent (Detrended).
     """
     period = 200
     
-    # --- Mapeamento de Colunas (Nomes exatos gerados pelos indicadores) ---
+    # --- Mapeamento de Colunas (Nomes exatos) ---
     wwma_200 = 'WWMA_200'
     
     # Bandas de Preço
@@ -91,7 +103,7 @@ def check_rules(latest_data: pd.Series) -> dict:
     bb_upper_0_45 = f'BB_Upper_{period}_0.45'
     bb_lower_0_45 = f'BB_Lower_{period}_0.45'
     
-    # TPM (OBTR/WAD) - Nomes com underline no decimal
+    # TPM (OBTR/WAD)
     obtr_mid = 'obtr_bb_middle_band'
     wad_mid = 'wad_bb_middle_band'
     
@@ -104,22 +116,32 @@ def check_rules(latest_data: pd.Series) -> dict:
     stoch_k = f'stoch_k_{STOCH_K_PERIOD}_{STOCH_K_SMOOTH}'
     ifr = 'IFR_120'
 
-    # Verifica integridade
+    # Hurst (Detrended) - Nome da coluna baseado nos parâmetros do calculate_indicators
+    hurst_col = 'Hurst_100_detrended_price'
+
+    # Verifica integridade básica
     required_cols = [bb_upper_1_0, bb_lower_1_0, 'close', 'obtr', 'wad', wwma_200, stoch_k]
     if any(col not in latest_data or pd.isna(latest_data[col]) for col in required_cols):
-        return {} # Retorna vazio se faltar dados críticos ou se houver NaN
+        return {} 
 
     # =========================================================================
-    # LÓGICA DAS REGRAS (ATUALIZADA)
+    # 1. ANÁLISE DO REGIME (HURST)
     # =========================================================================
-
-    # 1. Potencial Alta (Agressivo)
-    # -------------------------------------------------------------------------
-    # - Preço > Média 200 (Tendência Alta)
-    # - Preço dentro da Banda 1.0 (Não esticado/Consolidado)
-    # - Fluxo (OBTR ou WAD) > Banda Central (Força Compradora)
-    # - REMOVIDO: Estocástico < 50
     
+    # Recupera o Hurst (usa 0.5 como neutro se não existir por algum motivo)
+    hurst_val = latest_data.get(hurst_col, 0.5)
+
+    # Definição dos Regimes (Para Detrended Price)
+    # > 0.60: Tendência Persistente (Momentum forte, seguro para rompimentos)
+    # < 0.40: Mean Reversion (Preço "preso" ou elástico, seguro para comprar fundos/vender topos)
+    is_trending = hurst_val > 0.60
+    is_mean_reversion = hurst_val < 0.40
+
+    # =========================================================================
+    # 2. ANÁLISE TÉCNICA (SETUP ORIGINAL)
+    # =========================================================================
+
+    # --- Setup de Alta (Agressivo) ---
     preco_dentro_1_0 = (latest_data['close'] <= latest_data[bb_upper_1_0]) & \
                        (latest_data['close'] >= latest_data[bb_lower_1_0])
                        
@@ -128,24 +150,17 @@ def check_rules(latest_data: pd.Series) -> dict:
                  
     tendencia_alta = latest_data['close'] > latest_data[wwma_200]
     
-    potencial_alta = tendencia_alta & preco_dentro_1_0 & fluxo_alta
+    potencial_alta_tecnico = tendencia_alta & preco_dentro_1_0 & fluxo_alta
 
-    # 2. Potencial Baixa (Agressivo)
-    # -------------------------------------------------------------------------
-    # - Preço < Média 200 (Tendência Baixa)
-    # - Preço dentro da Banda 1.0 (Não esticado/Consolidado)
-    # - Fluxo (OBTR ou WAD) < Banda Central (Força Vendedora)
-    # - REMOVIDO: Estocástico > 50
-    
+    # --- Setup de Baixa (Agressivo) ---
     fluxo_baixa = (latest_data['obtr'] < latest_data[obtr_mid]) | \
                   (latest_data['wad'] < latest_data[wad_mid])
                   
     tendencia_baixa = latest_data['close'] < latest_data[wwma_200]
     
-    potencial_baixa = tendencia_baixa & preco_dentro_1_0 & fluxo_baixa
+    potencial_baixa_tecnico = tendencia_baixa & preco_dentro_1_0 & fluxo_baixa
 
-    # 3. Potencial Squeeze (Explosão)
-    # -------------------------------------------------------------------------
+    # --- Setup de Squeeze ---
     preco_squeeze = (latest_data['close'] <= latest_data[bb_upper_0_45]) & \
                     (latest_data['close'] >= latest_data[bb_lower_0_45])
     
@@ -157,22 +172,37 @@ def check_rules(latest_data: pd.Series) -> dict:
                    
     potencial_squeeze = preco_squeeze & (wad_squeeze | obtr_squeeze)
 
-    # 4. Setups de IFR (Reversão/Oportunidade)
-    # -------------------------------------------------------------------------
+    # --- Setups de IFR ---
     ifr_neutro = (latest_data[ifr] >= 48) & (latest_data[ifr] <= 52)
     squeeze_ifr_alta = ifr_neutro & (latest_data[stoch_k] < 30)
     squeeze_ifr_baixa = ifr_neutro & (latest_data[stoch_k] > 70)
 
+    # =========================================================================
+    # 3. FILTRAGEM FINAL PELO REGIME
+    # =========================================================================
+
+    # Regra de Ouro: Sinais de TENDÊNCIA só passam se Hurst confirmar TENDÊNCIA.
+    # Se o mercado estiver lateral (Hurst baixo), o sinal de rompimento é ignorado (falso rompimento provável).
+    
+    sinal_compra_final = potencial_alta_tecnico and is_trending
+    sinal_venda_final = potencial_baixa_tecnico and is_trending
+
     return {
-        'Sinal_Compra': bool(potencial_alta),
-        'Sinal_Venda': bool(potencial_baixa),
+        'Potencial_Alta': bool(sinal_compra_final),
+        'Potencial_Baixa': bool(sinal_venda_final),
         
-        'Potencial_Alta': bool(potencial_alta),
-        'Potencial_Baixa': bool(potencial_baixa),
+        # Sinais originais (sem filtro, para debug)
+        'Potencial_Alta_Tecnico': bool(potencial_alta_tecnico),
+        'Potencial_Baixa_Tecnico': bool(potencial_baixa_tecnico),
         'Potencial_Squeeze': bool(potencial_squeeze),
         
         'Squeeze_IFR_Alta': bool(squeeze_ifr_alta),
         'Squeeze_IFR_Baixa': bool(squeeze_ifr_baixa),
+        
+        # --- Metadados de Regime (Para o Dashboard) ---
+        'Regime_Tendencia': bool(is_trending),
+        'Regime_Lateral': bool(is_mean_reversion),
+        'Hurst_Score': float(hurst_val),
         
         # Flags Visuais
         'Filtro_Consolidacao': bool(preco_dentro_1_0),
