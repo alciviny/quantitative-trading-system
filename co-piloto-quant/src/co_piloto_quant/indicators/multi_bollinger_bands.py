@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 def wilder_moving_average(data: pd.Series, period: int) -> pd.Series:
     """Calcula a Média Móvel de Wilder (Wilder's Moving Average)."""
@@ -11,6 +12,9 @@ def multi_bollinger_bands(
 ) -> pd.DataFrame:
     """
     Calcula Bandas de Bollinger customizadas com múltiplos desvios e média de Welles Wilder.
+    
+    Agora o desvio padrão também é calculado usando a suavização de Wilder,
+    alinhando-se com a lógica de plataformas profissionais.
 
     Args:
         data (pd.Series): A série de dados de entrada (geralmente o output de outro indicador).
@@ -29,8 +33,15 @@ def multi_bollinger_bands(
     middle_band = wilder_moving_average(data, period)
     middle_band.name = 'middle_band'
 
-    # 2. Calcular o Desvio Padrão
-    rolling_std = data.rolling(window=period).std()
+    # 2. Calcular o Desvio Padrão (Usando lógica de Wilder/Exponencial)
+    # Passo A: Calcular a diferença quadrática em relação à média de Wilder
+    squared_diff = (data - middle_band) ** 2
+    
+    # Passo B: Suavizar a variância usando a mesma lógica da média de Wilder (ewm)
+    variance = squared_diff.ewm(alpha=1/period, adjust=False).mean()
+    
+    # Passo C: O desvio padrão é a raiz quadrada da variância suavizada
+    rolling_std = np.sqrt(variance)
 
     # 3. Criar o DataFrame de resultados
     results = pd.DataFrame(middle_band)
