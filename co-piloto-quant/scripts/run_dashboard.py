@@ -109,18 +109,33 @@ else:
     )
 
     # 1. Gráfico de Preço (Candles)
+   # 1. PREÇO
     fig.add_trace(go.Candlestick(
-        x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'],
-        name="OHLC"
+        x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name="OHLC"
     ), row=1, col=1)
 
-    # Média Móvel (Interativa pelo Slider)
-    mm_col = f'WWMA_{periodo_bb}' # Se não existir, teria que calcular, mas vamos usar a 200 fixa ou calcular on-the-fly
-    # Para simplificar a visualização, vamos plotar a 200 fixa do arquivo ou calcular simples aqui
+    # Média Móvel (Wilder)
     fig.add_trace(go.Scatter(
-        x=df.index, y=df['close'].ewm(span=periodo_bb).mean(), 
-        line=dict(color='orange', width=2), name=f"Média {periodo_bb}"
+        # USAR alpha=1/periodo EQUIVALE A WELLES WILDER
+        x=df.index, y=df['close'].ewm(alpha=1/periodo_bb, adjust=False).mean(), 
+        line=dict(color='orange', width=2), name=f"Média Wilder {periodo_bb}"
     ), row=1, col=1)
+    # --- Banda de 0.45 (APENAS A ZONA VERDE) ---
+    if 'BB_Upper_200_0.45' in df.columns:
+        # Linha Superior (invisível, apenas para limitar o fill)
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df['BB_Upper_200_0.45'], 
+            line=dict(width=0), showlegend=False, hoverinfo='skip'
+        ), row=1, col=1)
+        
+        # Linha Inferior (com preenchimento verde até a superior)
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df['BB_Lower_200_0.45'], 
+            line=dict(width=0), 
+            fill='tonexty', fillcolor='rgba(0, 255, 0, 0.15)', # Verde suave
+            name="Zona Squeeze (0.45)"
+        ), row=1, col=1)
+
 
     # Bandas de Bollinger Visuais
     if 'BB_Upper_200_2.0' in df.columns: # Usando as processadas
