@@ -86,3 +86,47 @@ O Score **não é um sinal de "Comprar" ou "Vender"**. Ele é uma **ferramenta d
 -   **Score Baixo (ex: 0, 1, 2):** Indica que o ativo não está alinhado com sua estratégia no momento. Você pode simplesmente ignorá-los e focar nos candidatos de Score alto.
 
 O objetivo do scanner e do Score é filtrar um universo de dezenas ou centenas de ativos para uma pequena lista de 5 a 15 ativos que realmente importam, economizando seu tempo e direcionando seu foco para as oportunidades mais promissoras.
+
+---
+
+## 3. Como Usar na Prática: O Fluxo de Trabalho Completo
+
+Agora que entendemos os conceitos, vamos ver como aplicá-los no dia a dia.
+
+### Passo 1: Atualizar os Dados e Executar o Scanner
+
+Antes de começar sua análise, sempre execute o scanner para garantir que você está trabalhando com os dados mais recentes. Abra o terminal e rode:
+
+```bash
+python scripts/run_scanner.py
+```
+
+Este comando irá:
+1.  Baixar os últimos dados de preços do mercado.
+2.  Calcular a **Tendência Macro** e o **Score** para cada ativo.
+3.  Salvar tudo em um arquivo chamado `scanner_results.csv`.
+
+Este é o seu ponto de partida.
+
+### Passo 2: Lançar o Dashboard Interativo
+
+Com os resultados em mãos, é hora da análise visual. Para isso, usamos o dashboard Streamlit. No mesmo terminal, execute:
+
+```bash
+streamlit run run_streamlit.py
+```
+
+Seu navegador abrirá automaticamente com o painel de análise.
+
+### Passo 3: Análise no Dashboard
+
+O dashboard foi projetado para ser intuitivo e eficiente:
+
+1.  **Visão Geral:** A primeira coisa que você verá é uma tabela com todos os ativos, seus respectivos Scores e a Tendência Macro. Você pode ordenar a tabela por qualquer coluna.
+2.  **Filtro:** Use os controles na barra lateral para filtrar os ativos. Uma boa prática é começar filtrando por:
+    -   **Tendência Macro:** "Alta"
+    -   **Score:** Maior que 3 ou 4
+    Isso reduzirá instantaneamente a lista para os ativos mais promissores que estão alinhados com a tendência de longo prazo.
+3.  **Análise Profunda:** Clique em um ativo na tabela. O dashboard exibirá gráficos detalhados mostrando o comportamento do preço junto com os indicadores (Estocástico, Bandas de Bollinger, etc.). Esta visão gráfica é crucial para você validar os sinais, entender o contexto e tomar sua decisão final.
+
+Este fluxo de trabalho (`scanner -> dashboard -> análise`) cria um processo sistemático e disciplinado, permitindo que você analise dezenas de ativos em minutos, focando sua energia apenas nas oportunidades que atendem aos seus critérios.
