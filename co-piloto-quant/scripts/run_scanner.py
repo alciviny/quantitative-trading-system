@@ -163,6 +163,10 @@ def run_scanner():
     print_group("VIRADA DE CICLO (Hilbert Sniper)", 'Sinal_Entrada_Ciclo', 
                 show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Hilbert_Periodo', 'Hilbert_Sine'])
 
+    # 6. FILTRO DE QUALIDADE (ENTROPIA)
+    print("\n--- 6. FILTRO DE QUALIDADE (ENTROPIA) ---")
+    print_group("MERCADO CAÓTICO/RUIDOSO (Sinais Bloqueados)", 'Regime_Caotico', show_cols=['Ticker', 'Preço', 'Hurst', 'Entropy_Score'])
+
     print("\n" + "="*80)
     print("Processamento concluído.")
     print("="*80)
