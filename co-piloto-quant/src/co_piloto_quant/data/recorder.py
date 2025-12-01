@@ -1,0 +1,143 @@
+import sqlite3
+import pandas as pd
+from datetime import datetime, timedelta
+from typing import Dict, Optional
+
+# Importamos a conexão do seu módulo de banco existente
+from co_piloto_quant.data.database import get_connection
+
+def init_recorder_db():
+    """
+    Cria a tabela de histórico de sinais se ela não existir.
+    Essa tabela será o 'Dataset' para o futuro Machine Learning.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS signals_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        ticker TEXT NOT NULL,
+        signal_type TEXT NOT NULL,       -- Ex: 'COMPRA_TENDENCIA', 'VENDA_SNIPER'
+        price_at_signal REAL,            -- Preço na hora do sinal
+        
+        -- Features (Os dados que a IA vai aprender a ler)
+        hurst_val REAL,
+        entropy_val REAL,
+        hilbert_cycle TEXT,
+        hilbert_period REAL,
+        half_life REAL,
+        ou_r2 REAL,
+        
+        -- Targets (O resultado futuro - preenchido depois)
+        price_5d_later REAL,
+        price_10d_later REAL,
+        result_5d_pct REAL,
+        success_5d BOOLEAN
+    )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    print("Tabela 'signals_history' inicializada/verificada com sucesso.")
+
+def record_signal(ticker: str, 
+                  signal_type: str, 
+                  price: float, 
+                  indicators: Dict[str, any]):
+    """
+    Grava um novo sinal no banco de dados.
+    Deve ser chamado pelo scanner quando um trade é identificado.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Data de hoje (ou do último candle processado)
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # Extrai os indicadores do dicionário de regras
+    hurst = indicators.get('Hurst_Score', 0)
+    entropy = indicators.get('Entropy_Score', 0)
+    cycle = indicators.get('Hilbert_Ciclo', 'Neutro')
+    period = indicators.get('Hilbert_Periodo', 0)
+    hl = indicators.get('Half_Life_Val', 0)
+    r2 = indicators.get('OU_R2', 0)
+    
+    try:
+        cursor.execute('''
+            INSERT INTO signals_history (
+                date, ticker, signal_type, price_at_signal,
+                hurst_val, entropy_val, hilbert_cycle, hilbert_period, half_life, ou_r2
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (today, ticker, signal_type, price, hurst, entropy, cycle, period, hl, r2))
+        
+        conn.commit()
+        # print(f"Sinal gravado: {ticker} | {signal_type}") # Descomente para debug
+    except Exception as e:
+        print(f"Erro ao gravar sinal para {ticker}: {e}")
+    finally:
+        conn.close()
+
+def update_outcomes():
+    """
+    Rotina de Manutenção:
+    Percorre sinais antigos que ainda não têm resultado e verifica o preço futuro.
+    Isso rotula os dados automaticamente (Auto-Labeling).
+    """
+    conn = get_connection()
+    
+    # 1. Carregar sinais pendentes (que têm mais de 5 dias e sem resultado)
+    query = """
+    SELECT id, date, ticker, price_at_signal 
+    FROM signals_history 
+    WHERE price_5d_later IS NULL
+    """
+    pending_signals = pd.read_sql(query, conn)
+    
+    if pending_signals.empty:
+        print("Nenhum sinal pendente para atualização de resultado.")
+        conn.close()
+        return
+
+    print(f"Atualizando resultados para {len(pending_signals)} sinais antigos...")
+    
+    cursor = conn.cursor()
+    
+    for _, row in pending_signals.iterrows():
+        signal_date = datetime.strptime(row['date'], "%Y-%m-%d")
+        target_date = signal_date + timedelta(days=5)
+        target_date_str = target_date.strftime("%Y-%m-%d")
+        
+        # Busca o preço no futuro (na tabela price_data existente)
+        # Nota: Assume que você tem a tabela 'price_data' populada pelo data_fetching.py
+        price_query = """
+        SELECT close FROM price_data 
+        WHERE ticker = ? AND date >= ? 
+        ORDER BY date ASC LIMIT 1
+        """
+        future_price_row = cursor.execute(price_query, (row['ticker'], target_date_str)).fetchone()
+        
+        if future_price_row:
+            future_price = future_price_row[0]
+            pct_change = (future_price - row['price_at_signal']) / row['price_at_signal']
+            
+            # Define sucesso (Ex: > 1% de lucro para compra, < -1% para venda)
+            # Simplificação: Aqui assume que todos são COMPRA. 
+            # Se tiver VENDA, precisa inverter a lógica do pct_change.
+            is_success = pct_change > 0.01 
+            
+            cursor.execute('''
+                UPDATE signals_history
+                SET price_5d_later = ?, result_5d_pct = ?, success_5d = ?
+                WHERE id = ?
+            ''', (future_price, pct_change, is_success, row['id']))
+            
+    conn.commit()
+    conn.close()
+    print("Atualização de resultados concluída.")
+
+if __name__ == "__main__":
+    # Teste rápido
+    init_recorder_db()
+    print("Módulo Recorder pronto.")
