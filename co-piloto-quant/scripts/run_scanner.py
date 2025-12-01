@@ -4,7 +4,8 @@ import pandas as pd
 import logging
 from tqdm import tqdm
 
-# Importações do projeto
+
+from co_piloto_quant.data.recorder import init_recorder_db, record_signal
 from co_piloto_quant.config import PROCESSED_DATA_PATH
 from co_piloto_quant.data.data_fetching import fetch_batch_data
 from co_piloto_quant.data.database import load_price_data
@@ -67,6 +68,17 @@ def run_scanner():
             except KeyError as e:
                 logger.error(f"[{ticker}] Erro de Chave na verificação de regras: {e}")
                 continue
+
+            # --- INÍCIO: Gravação de Sinais no Banco de Dados ---
+            if rules_check.get('Sinal_Compra'):
+                record_signal(ticker, 'COMPRA_TECNICA', latest_data.get('close'), rules_check)
+            
+            if rules_check.get('Sinal_Venda'):
+                record_signal(ticker, 'VENDA_TECNICA', latest_data.get('close'), rules_check)
+
+            if rules_check.get('Sinal_Pullback_Sniper'):
+                record_signal(ticker, 'COMPRA_SNIPER', latest_data.get('close'), rules_check)
+            # --- FIM: Gravação de Sinais ---
 
             # --- Coleta Dados para o Relatório ---
             debug_info = {'Ticker': ticker, **rules_check}
@@ -172,4 +184,5 @@ def run_scanner():
     print("="*80)
 
 if __name__ == "__main__":
+    init_recorder_db()
     run_scanner()
