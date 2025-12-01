@@ -106,8 +106,13 @@ def calculate_rolling_ou_params(
 
     beta_effective = np.minimum(beta, beta_floor)
 
+    # --- CORREÇÃO DE ROBUSTEZ: Evitar log de número negativo/zero ---
+    # Se beta se aproximar de -1, (1+beta) se aproxima de 0, e log1p falha.
+    # Fazemos o "clip" de beta para garantir que o argumento de log1p seja sempre > 0.
+    beta_clipped = beta_effective.clip(lower=-0.99999)
+
     # Theta from discrete beta: theta = -log(1 + beta)
-    theta = -np.log1p(beta_effective)
+    theta = -np.log1p(beta_clipped)
     
     # Half-life = log(2) / theta
     hl = np.log(2.0) / theta

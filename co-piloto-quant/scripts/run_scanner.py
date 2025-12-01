@@ -106,6 +106,15 @@ def run_scanner():
 
     df = pd.DataFrame(debug_results)
 
+    # --- Bloco de Diagnóstico Temporário ---
+    print("\n--- Diagnóstico do Período Hilbert ---")
+    if 'Hilbert_Periodo' in df.columns:
+        print(df['Hilbert_Periodo'].describe())
+    else:
+        print("AVISO: A coluna 'Hilbert_Periodo' não foi encontrada no DataFrame.")
+    print("-------------------------------------\n")
+    # --- Fim do Bloco de Diagnóstico ---
+
     # Função auxiliar para imprimir grupos
     def print_group(title, condition_col, show_cols=['Ticker', 'Preço', 'Hurst', 'Stoch']):
         # Verifica se a coluna existe antes de filtrar
@@ -128,29 +137,31 @@ def run_scanner():
     # 1. SINAIS FINAIS (FILTRADOS PELO HURST)
     # Usa 'Potencial_Alta' conforme seu analysis.py
     print("\n--- 1. SINAIS CONFIRMADOS (TENDÊNCIA + TÉCNICA) ---")
-    print_group("COMPRA FORTE (Confirmada)", 'Potencial_Alta', show_cols=['Ticker', 'Preço', 'Hurst', 'Regime_Tendencia'])
-    print_group("VENDA FORTE (Confirmada)", 'Potencial_Baixa', show_cols=['Ticker', 'Preço', 'Hurst', 'Regime_Tendencia'])
+    print_group("COMPRA FORTE (Confirmada)", 'Potencial_Alta', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Regime_Tendencia'])
+    print_group("VENDA FORTE (Confirmada)", 'Potencial_Baixa', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Regime_Tendencia'])
 
     # 2. REGIMES DE MERCADO
     print("\n--- 2. REGIMES DE MERCADO (Hurst Detrended) ---")
-    print_group("ALTA TENDÊNCIA (Hurst > 0.6)", 'Regime_Tendencia', show_cols=['Ticker', 'Preço', 'Hurst'])
-    print_group("MERCADO LATERAL/MEAN REVERSION (Hurst < 0.4)", 'Regime_Lateral', show_cols=['Ticker', 'Preço', 'Hurst', 'IFR'])
+    print_group("ALTA TENDÊNCIA (Hurst > 0.6)", 'Regime_Tendencia', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo'])
+    print_group("MERCADO LATERAL/MEAN REVERSION (Hurst < 0.4)", 'Regime_Lateral', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'IFR'])
 
     # 3. CONSOLIDAÇÃO & SQUEEZE
     print("\n--- 3. ESTRUTURA E VOLATILIDADE ---")
-    print_group("EM CONSOLIDAÇÃO (BB)", 'Filtro_Consolidacao', show_cols=['Ticker', 'Preço', 'Hurst'])
-    print_group("POTENCIAL SQUEEZE (Explosão)", 'Potencial_Squeeze', show_cols=['Ticker', 'Preço', 'Hurst', 'Preco_Em_Compressao'])
+    print_group("EM CONSOLIDAÇÃO (BB)", 'Filtro_Consolidacao', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo'])
+    print_group("POTENCIAL SQUEEZE (Explosão)", 'Potencial_Squeeze', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Preco_Em_Compressao'])
 
     # 4. CANDIDATOS TÉCNICOS (SEM FILTRO)
     # Usa 'Potencial_Alta_Tecnico'
     print("\n--- 4. CANDIDATOS TÉCNICOS (SEM VALIDAÇÃO DE REGIME) ---")
-    print_group("SETUP ALTA (Técnico Puro)", 'Potencial_Alta_Tecnico', show_cols=['Ticker', 'Preço', 'Hurst', 'Half_Life', 'OU_R2'])
-    print_group("SETUP BAIXA (Técnico Puro)", 'Potencial_Baixa_Tecnico', show_cols=['Ticker', 'Preço', 'Hurst', 'Half_Life', 'OU_R2'])
+    print_group("SETUP ALTA (Técnico Puro)", 'Potencial_Alta_Tecnico', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Half_Life', 'OU_R2'])
+    print_group("SETUP BAIXA (Técnico Puro)", 'Potencial_Baixa_Tecnico', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Half_Life', 'OU_R2'])
 
     # 5. SINAIS ESPECIAIS (Estratégias Alternativas)
     print("\n--- 5. SINAIS ESPECIAIS (Estratégias Alternativas) ---")
     print_group("OPORTUNIDADE OURO (Pullback Sniper)", 'Sinal_Pullback_Sniper', 
-                show_cols=['Ticker', 'Preço', 'Hurst', 'Half_Life', 'OU_R2'])
+                show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Half_Life', 'OU_R2'])
+    print_group("VIRADA DE CICLO (Hilbert Sniper)", 'Sinal_Entrada_Ciclo', 
+                show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Hilbert_Periodo', 'Hilbert_Sine'])
 
     print("\n" + "="*80)
     print("Processamento concluído.")
