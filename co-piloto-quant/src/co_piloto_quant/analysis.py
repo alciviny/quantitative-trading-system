@@ -5,13 +5,13 @@ from co_piloto_quant.config import (PROCESSED_DATA_PATH, STOCH_K_PERIOD,
                                      SYSTEM_PERIOD, SYSTEM_DEVIATIONS,
                                      BB_PERIOD, PRICE_BB_DEVIATIONS)
 
-# Procure a linha antiga e mude para:
 from co_piloto_quant.indicators.special.half_life import calculate_rolling_ou_params
 from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
 from co_piloto_quant.indicators.stochastic_custom import calculate_stochastic_custom
 from co_piloto_quant.indicators.system_tpm import calculate_system_tpm
 from co_piloto_quant.indicators.ww_moving_average import ww_moving_average
 from co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
+from co_piloto_quant.indicators.special.ehlers_hilbert import ehlers_sinewave
 
 # === CONFIGURAÇÃO DE SENSIBILIDADE DO HURST ===
 HURST_WINDOW = 72 
@@ -30,6 +30,14 @@ def safe_join(df_original: pd.DataFrame, df_new: pd.DataFrame) -> pd.DataFrame:
     return df_original.join(df_new[cols_to_use])
 
 def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    # --- CORREÇÃO DE ROBUSTEZ 1: Limpeza de Dados de Input ---
+    # Remove linhas com preço de fechamento inválido (zero ou negativo) que causam erros em logs
+    if 'close' in df.columns:
+        df = df[df['close'] > 0].copy()
+
+    # Remove linhas com índice duplicado que causam erros em cálculos de indicadores
+    df = df[~df.index.duplicated(keep='first')]
+
     if len(df) < 200: return pd.DataFrame()
 
     if 'WWMA_200' not in df.columns:
@@ -85,6 +93,13 @@ def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
         print(f"ERRO OU Params: {e}")
         return pd.DataFrame()
 # ---------------------------------------------
+
+    try:
+        # Calcula o Ehlers Sine Wave (agora robusto e ajustado para swing)
+        hilbert_df = ehlers_sinewave(df, column='close')
+        df = safe_join(df, hilbert_df)
+    except Exception as e:
+        print(f"ERRO Hilbert: {e}")
     
     return df
     
@@ -160,6 +175,50 @@ def check_rules(latest_data: pd.Series) -> dict:
 
     sinal_pullback_sniper = cond_elasticidade and (hurst_val > 0.55) and (ifr_val < 48)
 
+    # --- Lógica Hilbert Sine Wave ---
+    sine = latest_data.get('Hilbert_Sine', 0)
+    lead = latest_data.get('Hilbert_Lead', 0)
+    periodo_ciclo = latest_data.get('Hilbert_Period', 20)
+
+    # 1. Cruzamento de Reversão (O gatilho "Sniper")
+    # Sine cruzando Lead para CIMA = Fundo do Ciclo (Compra)
+    # Sine cruzando Lead para BAIXO = Topo do Ciclo (Venda)
+    # Como olhamos apenas o candle atual, usamos a posição relativa
+    ciclo_alta = sine > lead
+    ciclo_baixa = sine < lead
+    
+    # 2. Confirmação de Extremos (Evita operar no meio do caminho)
+    # Só nos interessa se o Sine estiver nas pontas (-1 a +1)
+    # Ex: Sine < -0.7 sugere que estamos na "bacia" do fundo
+    fundo_confirmado = sine < -0.7
+    topo_confirmado = sine > 0.7
+
+    # 3. Filtro de Qualidade do Ciclo
+    # Se o período estimado for muito curto (<10), o mercado está caótico.
+    # Se for "saudável" (entre 10 e 60), o sinal é válido.
+    ciclo_saudavel = (periodo_ciclo > 10) and (periodo_ciclo < 60)
+
+    # COMBINAÇÃO (Exemplo de sinal final)
+    # Compra se: Estivermos no fundo do ciclo E o ciclo virou pra cima E o ciclo é saudável
+    sinal_entrada_ciclo = fundo_confirmado and ciclo_alta and ciclo_saudavel
+
+    # 4. Criar Status de Ciclo (para o relatório)
+    hilbert_status = "Neutro"
+    if not ciclo_saudavel:
+        hilbert_status = "Caótico"
+    elif fundo_confirmado and ciclo_alta:
+        hilbert_status = "Virada (Fundo)"
+    elif topo_confirmado and ciclo_baixa:
+        hilbert_status = "Virada (Topo)"
+    elif fundo_confirmado:
+        hilbert_status = "Fundo Extremo"
+    elif topo_confirmado:
+        hilbert_status = "Topo Extremo"
+    elif ciclo_alta:
+        hilbert_status = "Subindo"
+    elif ciclo_baixa:
+        hilbert_status = "Caindo"
+
     return {
         'Sinal_Compra': bool(sinal_compra_final),
         'Sinal_Venda': bool(sinal_venda_final),
@@ -177,6 +236,10 @@ def check_rules(latest_data: pd.Series) -> dict:
         'Preco_Em_Compressao': bool(preco_squeeze),
         'Sinal_Pullback_Sniper': bool(sinal_pullback_sniper),
         'Half_Life_Val': float(hl_val),
-        'OU_R2': float(r2_val) # Útil para debug
+        'OU_R2': float(r2_val), # Útil para debug
+        'Sinal_Entrada_Ciclo': bool(sinal_entrada_ciclo),
+        'Hilbert_Ciclo': hilbert_status,
+        'Hilbert_Sine': float(sine),
+        'Hilbert_Periodo': float(periodo_ciclo)
     }
 

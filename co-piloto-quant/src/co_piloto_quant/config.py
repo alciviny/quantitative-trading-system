@@ -41,6 +41,10 @@ STOCH_K_PERIOD = 80  # Janela de lookback
 STOCH_K_SMOOTH = 3   # Suavização do %K (Média Simples)
 STOCH_D_SMOOTH = 3   # Suavização do %D (Linha de Sinal - Média Simples)
 
+# Parâmetros Ehlers Hilbert
+HILBERT_LONG_PERIOD = 40  # Janela de Swing Trade
+HILBERT_SHORT_PERIOD = 6  # Filtro de Ruído
+
 
 if __name__ == '__main__':
     # Este bloco é útil para depuração, para verificar se os caminhos estão corretos.
