@@ -50,6 +50,18 @@ def calculate_ehlers_sinewave(data: pd.DataFrame, column: str = 'close') -> pd.D
     # Prepara os dados
     prices = data[col_lower].values.astype(float)
     n = len(prices)
+
+    # --- INÍCIO DA CORREÇÃO: PRÉ-PROCESSAMENTO DETREND ---
+    # Remove a tendência de baixa frequência (Componente DC) para isolar o ciclo.
+    # Usamos a subtração de uma Média Móvel Exponencial (EMA) de 60 períodos.
+    # Este método é eficaz para remover a tendência sem afetar os ciclos de 
+    # médio prazo (15-50 barras) que o Hilbert precisa analisar.
+    ema_period = 60
+    ema = pd.Series(prices).ewm(span=ema_period, adjust=False).mean().values
+    detrended_prices = prices - ema
+    # O restante do cálculo usará 'detrended_prices'. A EMA introduz alguns
+    # valores inválidos no início, que são tratados pelo "warmup" no final.
+    # --- FIM DA CORREÇÃO ---
     
     # Arrays de Saída
     sine = np.full(n, np.nan)
@@ -81,9 +93,9 @@ def calculate_ehlers_sinewave(data: pd.DataFrame, column: str = 'close') -> pd.D
     # 1. Pré-suavização WMA (4-3-2-1)
     for i in range(n):
         if i >= 3:
-            smooth[i] = (4*prices[i] + 3*prices[i-1] + 2*prices[i-2] + prices[i-3]) / 10.0
+            smooth[i] = (4*detrended_prices[i] + 3*detrended_prices[i-1] + 2*detrended_prices[i-2] + detrended_prices[i-3]) / 10.0
         else:
-            smooth[i] = prices[i]
+            smooth[i] = detrended_prices[i]
 
     # 2. Roofing Filter (SuperSmoother Curto - SuperSmoother Longo)
     ss_short = ehlers_super_smoother(smooth, short_period)

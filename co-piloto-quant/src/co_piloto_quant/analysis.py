@@ -342,7 +342,7 @@ def check_rules(latest_data: pd.Series) -> dict:
     ciclo_baixa = sine < lead
     fundo_confirmado = sine < -0.7
     topo_confirmado = sine > 0.7
-    ciclo_saudavel = (periodo_ciclo > 10) and (periodo_ciclo < 60)
+    ciclo_saudavel = (periodo_ciclo > 8) and (periodo_ciclo < 120)
     sinal_entrada_ciclo = fundo_confirmado and ciclo_alta and ciclo_saudavel
 
     # Status Hilbert (Texto)
@@ -361,7 +361,7 @@ def check_rules(latest_data: pd.Series) -> dict:
     entropy_val = latest_data.get('Entropy_20', 10.0)
     
     # Define o limite (2.8 bits é um bom corte inicial para caos)
-    is_chaotic = entropy_val >= 2.8
+    is_chaotic = entropy_val >= 3.2
     is_orderly = not is_chaotic
 
     # --- 4. Composição dos Sinais Finais ---
