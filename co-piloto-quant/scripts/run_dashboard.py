@@ -59,6 +59,11 @@ periodo_bb = st.sidebar.slider("Período Bollinger/Médias", 20, 300, 200)
 desvio_bb = st.sidebar.number_input("Desvio Padrão", 1.0, 3.0, 2.0, 0.1)
 ver_bandas_sistema = st.sidebar.checkbox("Ver Bandas de Fluxo (TPM)", value=True)
 
+# --- Na Barra Lateral, adicione este controle novo ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔬 Laboratório Quant")
+modo_analise_profunda = st.sidebar.checkbox("Ativar Indicadores Espectrais (Half-Life/Hilbert)", value=False)
+
 # --- Corpo Principal ---
 st.title(f"📊 Análise Quantitativa: {selected_ticker}")
 
@@ -113,15 +118,40 @@ else:
 
 
     # --- Visualização Gráfica (Plotly) ---
-    # Setup de Subplots (Preço + Fluxo + IFR + Estocástico + HURST)
+    
+    # Definição dinâmica de linhas baseada no modo escolhido
+    if modo_analise_profunda:
+        total_rows = 8 # AUMENTADO PARA 8 LINHAS
+        # Alturas ajustadas para 8 gráficos, dando um pouco mais de espaço para os de física
+        row_heights = [0.35, 0.10, 0.10, 0.10, 0.10, 0.10, 0.075, 0.075] 
+        titles = (
+            "Ação do Preço & Estrutura", "Fluxo (OBTR/WAD)", "Oscilador (IFR)", 
+            "Estocástico (80,3,3)", "Regime (Hurst)", 
+            "Ciclos de Mercado (Hilbert Sine)", 
+            "Física: Half-Life (Barras)", # Título separado
+            "Física: Entropia (Linha)"     # Título separado
+        )
+        fig_height = 2000 # Altura aumentada
+    else:
+        total_rows = 5
+        row_heights = [0.40, 0.15, 0.15, 0.15, 0.15]
+        titles = (
+            "Ação do Preço & Estrutura", "Fluxo (OBTR/WAD)", "Oscilador (IFR)", 
+            "Estocástico (80,3,3)", "Regime (Hurst)"
+        )
+        fig_height = 1400
+
     fig = make_subplots(
-        rows=5, cols=1,  # <--- AGORA SÃO 5 LINHAS
-        shared_xaxes=True, 
-        vertical_spacing=0.02, 
-        # Ajustando alturas: Preço maior, outros menores e iguais
-        row_heights=[0.40, 0.15, 0.15, 0.15, 0.15], 
-        subplot_titles=("Ação do Preço & Estrutura", "Fluxo (OBTR/WAD)", "Oscilador (IFR)", "Estocástico (80,3,3)", "Regime de Mercado (Hurst)")
+        rows=total_rows, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=row_heights,
+        subplot_titles=titles,
+        # REMOVIDO secondary_y, agora todos os eixos são primários
+        specs=[[{"secondary_y": False}]] * total_rows 
     )
+
+    # --- PLOTS ORIGINAIS (LINHAS 1-5) ---
 
     # 1. PREÇO (Row 1)
     fig.add_trace(go.Candlestick(
@@ -216,12 +246,68 @@ else:
         
         # Ajusta range do eixo Y para focar na área útil
         fig.update_yaxes(range=[0.2, 0.9], row=5, col=1)
+    
+    # -------------------------------------------------------------------------
+    # --- NOVAS VISUALIZAÇÕES (Fórmulas Invisíveis) ---
+    # -------------------------------------------------------------------------
+    
+    if modo_analise_profunda:
+        # 6. HILBERT SINE WAVE (Row 6) - O Gatilho de Precisão
+        if 'Hilbert_Sine' in df.columns and 'Hilbert_Lead' in df.columns:
+            # Onda Senoidal (Verde Neon)
+            fig.add_trace(go.Scatter(
+                x=df.index, y=df['Hilbert_Sine'],
+                line=dict(color='#00FF00', width=1.5), name="Hilbert Sine"
+            ), row=6, col=1)
+            
+            # Onda Líder (Amarelo - Antecipa o movimento)
+            fig.add_trace(go.Scatter(
+                x=df.index, y=df['Hilbert_Lead'],
+                line=dict(color='yellow', width=1, dash='solid'), name="Hilbert Lead"
+            ), row=6, col=1)
+
+            # Linhas de Gatilho (+0.7 e -0.7)
+            fig.add_hline(y=0.7, line_dash="dot", line_color="gray", row=6, col=1)
+            fig.add_hline(y=-0.7, line_dash="dot", line_color="gray", row=6, col=1)
+            
+            # Preenchimento visual de Fundo/Topo
+            fig.add_hrect(y0=-1, y1=-0.7, fillcolor="green", opacity=0.1, line_width=0, row=6, col=1) # Zona de Compra
+            fig.add_hrect(y0=0.7, y1=1, fillcolor="red", opacity=0.1, line_width=0, row=6, col=1)     # Zona de Venda
+
+        # 7. FÍSICA DE MERCADO: HALF-LIFE (Row 7) - AGORA SOZINHO
+        if 'HalfLife_60' in df.columns:
+            # Clip visual para não estragar o gráfico quando HL explode para 1000
+            hl_plot = df['HalfLife_60'].clip(upper=50) 
+            
+            fig.add_trace(go.Bar(
+                x=df.index, y=hl_plot,
+                marker_color='rgba(100, 200, 255, 0.3)',
+                name="Half-Life (Dias)",
+            ), row=7, col=1)
+
+            # Linha de corte para opções (Ex: 10 dias)
+            fig.add_hline(y=10, line_dash="dash", line_color="cyan", annotation_text="Zona Opções (&lt;10d)", row=7, col=1)
+
+        # 8. FÍSICA DE MERCADO: ENTROPIA (Row 8) - NOVO PAINEL
+        if 'Entropy_20' in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df.index, y=df['Entropy_20'],
+                line=dict(color='orange', width=2),
+                name="Entropia (Caos)"
+            ), row=8, col=1) # MOVIDO PARA ROW 8
+            
+            # Zona de Caos (> 3.0 bits)
+            fig.add_hrect(y0=3.0, y1=4.0, fillcolor="red", opacity=0.1, line_width=0, row=8, col=1) # MOVIDO PARA ROW 8
+
+        # ATUALIZAÇÃO DOS EIXOS Y SEPARADAMENTE
+        fig.update_yaxes(title_text="Half-Life (Dias)", range=[0, 50], row=7, col=1)
+        fig.update_yaxes(title_text="Entropia (Bits)", range=[1, 4], row=8, col=1)
 
     # Layout Final
     fig.update_layout(
-        height=1400, # Aumentei a altura para caber o 5º gráfico
+        height=fig_height, # Aumentei a altura para caber o 5º gráfico
         xaxis_rangeslider_visible=False,
-        template="plotly_dark",
+        template="plotly_white",
         margin=dict(l=10, r=10, t=30, b=10),
         legend=dict(orientation="h", y=1, x=0)
     )
