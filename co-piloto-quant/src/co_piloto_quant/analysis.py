@@ -29,7 +29,7 @@ def safe_join(df_original: pd.DataFrame, df_new: pd.DataFrame) -> pd.DataFrame:
     cols_to_use = df_new.columns.difference(df_original.columns)
     return df_original.join(df_new[cols_to_use])
 
-def calculate_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def calculate_indicators(df: pd.DataFrame, calculate_hurst: bool = True) -> pd.DataFrame:
     # --- CORREÇÃO DE ROBUSTEZ 1: Limpeza de Dados de Input ---
     #---------------------------------------------------------
     if 'close' in df.columns:

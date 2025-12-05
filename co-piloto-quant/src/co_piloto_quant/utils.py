@@ -1,6 +1,19 @@
 """
 Módulo de utilidades para fornecer listas de tickers e outras informações de apoio.
 """
+import sqlite3
+import pandas as pd
+from datetime import datetime
+from pathlib import Path
+
+# Tenta importar a configuração, com fallback seguro
+try:
+    from co_piloto_quant.config import DATA_PATH
+except (ModuleNotFoundError, ImportError):
+    DATA_PATH = Path(__file__).resolve().parent.parent / "data"
+
+DB_PATH = DATA_PATH / "market_data.db"
+
 
 def get_ibov_tickers():
     """
@@ -42,3 +55,65 @@ if __name__ == '__main__':
     novos_tickers = ['MBRF3.SA', 'BRAV3.SA', 'AZZA3.SA', 'EMBJ3.SA']
     presentes = [t for t in novos_tickers if t in all_tickers]
     print(f"Novos tickers verificados na lista: {presentes}")
+
+
+def get_scanner_tickers(date: str = 'today') -> list:
+    """
+    Busca no banco de dados os tickers que tiveram um sinal na data especificada.
+
+    Args:
+        date (str, optional): A data para buscar os sinais. 
+                              Pode ser 'today' (padrão) ou uma data no formato 'YYYY-MM-DD'.
+
+    Returns:
+        list: Uma lista de tickers únicos que tiveram sinais na data.
+    """
+    if date == 'today':
+        query_date = datetime.now().strftime("%Y-%m-%d")
+    else:
+        query_date = date
+
+    if not DB_PATH.exists():
+        print(f"Erro: O arquivo de banco de dados não foi encontrado em: {DB_PATH}")
+        return []
+
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            # Verifica se a tabela existe antes de fazer a query
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='signals_history';")
+            if cursor.fetchone() is None:
+                print(f"Erro: A tabela 'signals_history' não existe no banco de dados.")
+                return []
+
+            query = "SELECT DISTINCT ticker FROM signals_history WHERE date = ?"
+            df = pd.read_sql_query(query, conn, params=(query_date,))
+        
+        if df.empty:
+            print(f"Nenhum ticker com sinal encontrado no banco de dados para a data: {query_date}")
+            return []
+            
+        return df['ticker'].tolist()
+    except Exception as e:
+        print(f"Erro ao acessar o banco de dados de sinais: {e}")
+        return []
+
+
+def get_all_available_tickers() -> list:
+    """
+    Busca no banco de dados todos os tickers distintos que possuem dados de preço (OHLCV).
+
+    Returns:
+        list: Uma lista ordenada de todos os tickers disponíveis.
+    """
+    if not DB_PATH.exists():
+        print(f"Erro: O arquivo de banco de dados não foi encontrado em: {DB_PATH}")
+        return []
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            query = "SELECT DISTINCT ticker FROM ohlcv ORDER BY ticker ASC"
+            df = pd.read_sql_query(query, conn)
+        return df['ticker'].tolist()
+    except Exception as e:
+        print(f"Erro ao buscar todos os tickers do banco de dados: {e}")
+        return []
