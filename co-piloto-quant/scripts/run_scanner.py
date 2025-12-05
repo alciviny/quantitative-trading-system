@@ -57,90 +57,99 @@ def process_single_ticker(ticker):
 
 def run_scanner():
     """
-    Executa o scanner de mercado de forma paralela, gera relatórios e salva os dados.
+    Executa o scanner de mercado, agora com uma lógica de relatório híbrida:
+    usa a 'check_rules' para os sinais finais e recalcula os status secundários
+    para um relatório de mercado detalhado.
     """
     tickers = get_top_50_tickers()
     logger.info(f"Scanner iniciado para {len(tickers)} tickers.")
 
-    # 1. Download e Salvamento (Garante dados frescos)
-    # Esta parte permanece sequencial, pois é predominantemente I/O-bound.
+    # 1. Atualização da Base de Dados
     period = "max"
     interval = "1d"
     logger.info(f"Atualizando base de dados com período '{period}'...")
-    
     try:
         fetch_batch_data(tickers, period=period, interval=interval)
     except Exception as e:
         logger.error(f"Não foi possível baixar os dados em lote. Erro: {e}")
         return
 
-    debug_results = []
-    results = []
-
+    all_results = []
     logger.info("Iniciando análise paralela dos ativos...")
 
-    # 2. Análise Ativo por Ativo em Paralelo
-    # Usamos ProcessPoolExecutor para rodar a função CPU-bound em múltiplos processos
-    # O número de workers é gerenciado pelo `os.cpu_count()`
+    # 2. Análise em Paralelo
     with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
-        # `executor.map` aplica a função a cada item da lista de tickers
-        # `tqdm` envolve o resultado para mostrar a barra de progresso
         future_to_ticker = {executor.submit(process_single_ticker, ticker): ticker for ticker in tickers}
-        
         for future in tqdm(concurrent.futures.as_completed(future_to_ticker), total=len(tickers), desc="Processando Ativos"):
             result = future.result()
             if result:
-                results.append(result)
+                all_results.append(result)
 
-    logger.info("Análise paralela concluída. Coletando e salvando resultados...")
+    logger.info("Análise concluída. Gerando relatório detalhado...")
 
-    # 3. Processamento Sequencial dos Resultados
-    # Esta parte é rápida e centraliza a escrita no DB e a agregação de relatórios.
-    for result_item in results:
+    # 3. Processamento e Agregação para Relatório Detalhado
+    report_data = []
+    for result_item in all_results:
         if result_item is None:
             continue
         
         ticker, latest_data, rules_check = result_item
 
-        # --- INÍCIO: Gravação de Sinais no Banco de Dados (Centralizado) ---
+        # --- Gravação dos Sinais Finais no Banco ---
         if rules_check.get('Sinal_Compra'):
-            record_signal(ticker, 'COMPRA_TECNICA', latest_data.get('close'), rules_check)
-        
+            record_signal(ticker, 'COMPRA_FINAL', latest_data.get('close'), rules_check)
         if rules_check.get('Sinal_Venda'):
-            record_signal(ticker, 'VENDA_TECNICA', latest_data.get('close'), rules_check)
+            record_signal(ticker, 'VENDA_FINAL', latest_data.get('close'), rules_check)
 
-        if rules_check.get('Sinal_Pullback_Sniper'):
-            record_signal(ticker, 'COMPRA_SNIPER', latest_data.get('close'), rules_check)
-        # --- FIM: Gravação de Sinais ---
+        # --- RECONSTRUÇÃO DOS STATUS PARA O RELATÓRIO DETALHADO ---
+        # Recalcula as condições de regime e potencial que antes vinham da check_rules
+        hurst_val = latest_data.get('Hurst_72_returns', 0.5)
+        entropy_val = latest_data.get('Entropy_20', 10.0)
+        
+        status_info = {
+            'Ticker': ticker,
+            'Preço': latest_data.get('close'),
+            'Hurst': hurst_val,
+            'Estocástico': latest_data.get(f'stoch_k_{80}_{3}'),
+            'Half_Life': latest_data.get('HalfLife_60'),
+            'OU_R2': latest_data.get('R2_60'),
+            'Entropy_Score': entropy_val,
+            'Hilbert_Ciclo': latest_data.get('Hilbert_Status', 'N/A'),
+            'Hilbert_Periodo': latest_data.get('Hilbert_Period'),
+            
+            # Sinais Finais da nova 'check_rules'
+            'Sinal_Compra_Final': rules_check.get('Sinal_Compra', False),
+            'Sinal_Venda_Final': rules_check.get('Sinal_Venda', False),
 
-        # --- Coleta Dados para o Relatório ---
-        debug_info = {'Ticker': ticker, **rules_check}
-        debug_info['Preço'] = latest_data.get('close')
-        debug_info['IFR'] = latest_data.get('IFR_120')
-        debug_info['Stoch'] = latest_data.get('stoch_k_80_3')
-        debug_info['Hurst'] = latest_data.get('Hurst_72_returns', 0.5)
-        debug_info['Half_Life'] = rules_check.get('Half_Life_Val', 1000)
-        debug_info['OU_R2'] = rules_check.get('OU_R2', 0.0)
+            # Status de Regime
+            'Regime_Tendencia': hurst_val > 0.54,
+            'Regime_Lateral': hurst_val < 0.46,
+            'Regime_Caotico': entropy_val >= 3.2,
 
-        debug_results.append(debug_info)
+            # Status de Squeeze (usando BB de 0.45)
+            'Potencial_Squeeze': (
+                latest_data.get('close') <= latest_data.get('BB_Upper_200_0.45', float('inf')) and
+                latest_data.get('close') >= latest_data.get('BB_Lower_200_0.45', float('-inf'))
+            )
+        }
+        report_data.append(status_info)
 
-    # --- RELATÓRIOS (sem alterações) ---
+    # --- ANTIGO RELATÓRIO DETALHADO (RESTAURADO E ADAPTADO) ---
     pd.set_option('display.float_format', lambda x: f'{x:.2f}')
     pd.set_option('display.max_rows', None) 
     pd.set_option('display.expand_frame_repr', False) 
 
     print("\n" + "="*80)
-    print(f"      RAIO-X DETALHADO DO MERCADO ({len(debug_results)} ativos processados)")
+    print(f"      RAIO-X DETALHADO DO MERCADO ({pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')})")
     print("="*80)
 
-    if not debug_results:
+    if not report_data:
         print("Nenhum dado processado.")
         return
 
-    df = pd.DataFrame(debug_results)
+    df = pd.DataFrame(report_data)
 
-    # Função auxiliar para imprimir grupos
-    def print_group(title, condition_col, show_cols=['Ticker', 'Preço', 'Hurst', 'Stoch']):
+    def print_group(title, condition_col, show_cols, sort_col='Hurst', ascending=False):
         if condition_col not in df.columns:
             print(f"\n>> {title} [AVISO: Coluna '{condition_col}' não encontrada]")
             return
@@ -148,35 +157,25 @@ def run_scanner():
         subset = df[df[condition_col] == True]
         print(f"\n>> {title} (Total: {len(subset)})")
         if not subset.empty:
-            sort_col = 'Hurst' if 'Hurst' in show_cols and 'Hurst' in subset.columns else 'Ticker'
+            # Garante que a coluna de ordenação exista antes de usá-la
+            sort_col = sort_col if sort_col in subset.columns else 'Ticker'
             valid_cols = [c for c in show_cols if c in subset.columns]
-            print(subset[valid_cols].sort_values(by=sort_col, ascending=False).to_string(index=False))
+            print(subset[valid_cols].sort_values(by=sort_col, ascending=ascending).to_string(index=False))
         else:
             print("   - Nenhum ativo encontrado.")
 
-    print("\n--- 1. SINAIS CONFIRMADOS (TENDÊNCIA + TÉCNICA) ---")
-    print_group("COMPRA FORTE (Confirmada)", 'Potencial_Alta', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Regime_Tendencia'])
-    print_group("VENDA FORTE (Confirmada)", 'Potencial_Baixa', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Regime_Tendencia'])
+    # --- 1. SINAIS PRINCIPAIS (DA NOVA ESTRATÉGIA) ---
+    print("\n--- 1. SINAIS DE ENTRADA CONFIRMADOS (ESTRATÉGIA PRINCIPAL) ---")
+    print_group("COMPRA (Sinal Final)", 'Sinal_Compra_Final', show_cols=['Ticker', 'Preço', 'Estocástico', 'Stop Sugerido Compra'], sort_col='Ticker')
+    print_group("VENDA (Sinal Final)", 'Sinal_Venda_Final', show_cols=['Ticker', 'Preço', 'Estocástico', 'Stop Sugerido Venda'], sort_col='Ticker')
+
+    # --- 2. ANÁLISE DE REGIMES E DIAGNÓSTICOS ---
+    print("\n--- 2. REGIMES DE MERCADO E DIAGNÓSTICOS ---")
+    print_group("ALTA TENDÊNCIA (Hurst > 0.54)", 'Regime_Tendencia', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo'])
+    print_group("MERCADO LATERAL (Hurst < 0.46)", 'Regime_Lateral', show_cols=['Ticker', 'Preço', 'Hurst', 'Half_Life', 'OU_R2'], sort_col='Half_Life', ascending=True)
+    print_group("POTENCIAL SQUEEZE (Dentro da BB 0.45)", 'Potencial_Squeeze', show_cols=['Ticker', 'Preço', 'Hurst', 'Estocástico'])
+    print_group("MERCADO CAÓTICO (Entropia >= 3.2)", 'Regime_Caotico', show_cols=['Ticker', 'Preço', 'Hurst', 'Entropy_Score'])
     
-    print("\n--- 2. REGIMES DE MERCADO (Hurst Detrended) ---")
-    print_group("ALTA TENDÊNCIA (Hurst > 0.6)", 'Regime_Tendencia', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo'])
-    print_group("MERCADO LATERAL/MEAN REVERSION (Hurst < 0.4)", 'Regime_Lateral', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'IFR'])
-
-    print("\n--- 3. ESTRUTURA E VOLATILIDADE ---")
-    print_group("EM CONSOLIDAÇÃO (BB)", 'Filtro_Consolidacao', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo'])
-    print_group("POTENCIAL SQUEEZE (Explosão)", 'Potencial_Squeeze', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Preco_Em_Compressao'])
-
-    print("\n--- 4. CANDIDATOS TÉCNICOS (SEM VALIDAÇÃO DE REGIME) ---")
-    print_group("SETUP ALTA (Técnico Puro)", 'Potencial_Alta_Tecnico', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Half_Life', 'OU_R2'])
-    print_group("SETUP BAIXA (Técnico Puro)", 'Potencial_Baixa_Tecnico', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Half_Life', 'OU_R2'])
-
-    print("\n--- 5. SINAIS ESPECIAIS (Estratégias Alternativas) ---")
-    print_group("OPORTUNIDADE OURO (Pullback Sniper)", 'Sinal_Pullback_Sniper', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Half_Life', 'OU_R2'])
-    print_group("VIRADA DE CICLO (Hilbert Sniper)", 'Sinal_Entrada_Ciclo', show_cols=['Ticker', 'Preço', 'Hurst', 'Hilbert_Ciclo', 'Hilbert_Periodo', 'Hilbert_Sine'])
-
-    print("\n--- 6. FILTRO DE QUALIDADE (ENTROPIA) ---")
-    print_group("MERCADO CAÓTICO/RUIDOSO (Sinais Bloqueados)", 'Regime_Caotico', show_cols=['Ticker', 'Preço', 'Hurst', 'Entropy_Score'])
-
     print("\n" + "="*80)
     print("Processamento concluído.")
     print("="*80)
