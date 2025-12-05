@@ -8,12 +8,12 @@ from co_piloto_quant.utils import get_scanner_tickers
 
 # --- CONFIGURAÇÕES DO BACKTEST ---
 INITIAL_CAPITAL = 100000
-# STOP_LOSS_PCT = 0.10 # Comentado pois o stop agora é dinâmico
+STOP_LOSS_PCT = 0.06 # Ativado para stop de emergência fixo
 FEES_PCT = 0.0006
 SLIPPAGE_PCT = 0.001
 
 # --- CONFIGURAÇÕES DA ESTRATÉGIA ---
-BB_EXIT_STD_DEV = 1.5
+BB_EXIT_STD_DEV = 2.0
 ENTROPY_CHAOS_THRESHOLD = 3.2  # Limite para o filtro de entropia
 
 # Ignorar avisos de cálculo do vectorbt
@@ -40,20 +40,29 @@ def run_vectorized_backtest(ticker: str):
     print(f"[{ticker}] Gerando sinais de forma vetorizada...")
 
     # --- Lógica de ENTRADA ---
-    is_orderly = df['Entropy_20'] < ENTROPY_CHAOS_THRESHOLD
-    tendencia_alta = df['close'] > df['WWMA_200']
+    # TRIO DE FILTROS DE REGIME: Só operar em mercados com tendência, organização e sustentação.
+    filtro_tendencia = df.get('Hurst_72_returns', pd.Series(0.0, index=df.index)) >= 0.53
+    filtro_caos = df.get('Entropy_20', pd.Series(999.0, index=df.index)) <= 3.2
+    filtro_sustentacao = df.get('HalfLife_60', pd.Series(0.0, index=df.index)) >= 15
+    regime_filter = filtro_tendencia & filtro_caos & filtro_sustentacao
     
-    # CRITÉRIO DE ENTRADA NA BANDA DE BOLLINGER (AJUSTADO)
-    # O preço deve estar na metade SUPERIOR da banda com desvio de 0.45
-    preco_na_metade_superior = (df['close'] <= df[f'BB_Upper_{200}_0.45']) & (df['close'] >= df[f'BB_Middle_{200}'])
+    # tendencia_alta = df['close'] > df['WWMA_200'] # REMOVIDO para permitir pullbacks
+
+    # NOVA "ZONA DE VALOR": Preço entre BB Inferior (0.45) e BB Superior (0.45)
+    preco_na_zona_valor = (df['close'] >= df[f'BB_Lower_{200}_0.45']) & \
+                          (df['close'] <= df[f'BB_Upper_{200}_0.45'])
     
+    # FILTRO DE INCLINAÇÃO DA WWMA PARA SEGURANÇA
+    inclincao_wwma_positiva = df['WWMA_200'].diff(5) > 0
+
     fluxo_alta = (df['obtr'] > df['obtr_bb_middle_band']) | (df['wad'] > df['wad_bb_middle_band'])
-    potencial_alta_tecnico = tendencia_alta & preco_na_metade_superior & fluxo_alta
+    # potencial_alta_tecnico = tendencia_alta & preco_na_metade_superior & fluxo_alta # ANTES
+    potencial_alta_tecnico = preco_na_zona_valor & inclincao_wwma_positiva & fluxo_alta # AGORA
     
     # --- CRITÉRIO DE ENTRADA (ESTOCÁSTICO) ---
     stoch_k_col = 'stoch_k_80_3' 
     condicao_stoch_compra = df[stoch_k_col] < 30
-    entries = potencial_alta_tecnico & is_orderly & condicao_stoch_compra
+    entries = potencial_alta_tecnico & regime_filter & condicao_stoch_compra
 
     # --- Lógica de SAÍDA (COMPRA) ---
     bb_exit_col = f'BB_Upper_{200}_{BB_EXIT_STD_DEV}'
@@ -74,7 +83,7 @@ def run_vectorized_backtest(ticker: str):
     
     # --- CRITÉRIO DE ENTRADA (ESTOCÁSTICO) ---
     condicao_stoch_venda = df[stoch_k_col] > 70
-    short_entries = potencial_baixa_tecnico & is_orderly & condicao_stoch_venda
+    short_entries = potencial_baixa_tecnico & regime_filter & condicao_stoch_venda
 
     # --- Lógica de SAÍDA (VENDA) ---
     bb_short_exit_col = f'BB_Lower_{200}_{BB_EXIT_STD_DEV}'
@@ -99,7 +108,7 @@ def run_vectorized_backtest(ticker: str):
         exits=exits,
         short_entries=short_entries,
         short_exits=short_exits,
-        # sl_stop foi removido para usar o stop dinâmico da banda de bollinger
+        sl_stop=STOP_LOSS_PCT,
         init_cash=INITIAL_CAPITAL,
         fees=FEES_PCT,
         slippage=SLIPPAGE_PCT,
@@ -109,53 +118,85 @@ def run_vectorized_backtest(ticker: str):
     return portfolio
 
 if __name__ == "__main__":
-    tickers = get_scanner_tickers() # Pega os tickers do banco de dados do scanner
-    all_stats = []
-    last_pf = None # Armazena o último portfólio para plotagem
+    import os
+    from datetime import datetime
+
+    tickers = get_scanner_tickers() 
+    todos_resultados = []
+
+    print(f"--- INICIANDO BATCH DE BACKTESTS PARA {len(tickers)} ATIVOS ---")
 
     for ticker in tickers:
         pf = run_vectorized_backtest(ticker)
         if pf:
             stats = pf.stats()
             if stats['Total Trades'] > 0:
-                stats['Ticker'] = ticker
-                all_stats.append(stats)
-                last_pf = pf # Salva o portfólio se teve trades
-                
-                print("\n" + "="*50)
-                print(f"RESULTADO DO BACKTEST: {ticker}")
-                print("="*50)
-                # --- CORREÇÃO APLICADA AQUI ---
-                print(f"Período: {stats['Start']} a {stats['End']}")
-                print(f"Retorno Total:     {stats['Total Return [%]']:.2f}%")
-                print(f"Win Rate:          {stats['Win Rate [%]']:.2f}%")
-                print(f"Trades Totais:     {stats['Total Trades']}")
-                print(f"Sharpe Ratio:      {stats['Sharpe Ratio']:.2f} (CALMAR {stats['Calmar Ratio']:.2f})")
-                print(f"Max Drawdown:      {stats['Max Drawdown [%]']:.2f}%")
-                print("-" * 50)
+            
+            # Cálculo de anos para a métrica de frequência
+                start_date = pd.to_datetime(stats['Start'])
+                end_date = pd.to_datetime(stats['End'])
+                anos_de_historico = (end_date - start_date).days / 365.25
+            
+            if anos_de_historico > 0:
+                trades_por_ano = stats['Total Trades'] / anos_de_historico
             else:
-                 print(f"\n--- Sem trades para {ticker} ---")
+                trades_por_ano = 0
+
+            # Coleta dos dados para o relatório
+            resultado = {
+                'Ticker': ticker,
+                'Retorno Total (%)': stats['Total Return [%]'],
+                'Lucro Líquido (Cash)': stats['End Value'] - stats['Start Value'],
+                'Total de Trades': stats['Total Trades'],
+                'Win Rate (%)': stats['Win Rate [%]'],
+                'Sharpe Ratio': stats['Sharpe Ratio'],
+                'Max Drawdown (%)': stats['Max Drawdown [%]'],
+                'Trades por Ano': trades_por_ano
+            }
+            todos_resultados.append(resultado)
+            
+            print(f"--- ✅ Backtest de {ticker} concluído com {stats['Total Trades']} trades. ---")
         else:
-            print(f"\n--- Falha ao gerar portfólio para {ticker} (sem sinais ou dados) ---")
+            print(f"--- ⚠️ Sem trades ou dados para {ticker}. ---")
 
-    if all_stats:
-        df_summary = pd.DataFrame(all_stats).set_index('Ticker')
+    if todos_resultados:
+        # Criação do DataFrame consolidado
+        df_report = pd.DataFrame(todos_resultados)
         
-        # Todas as chaves aqui já estavam corretas, conforme sua saída de debug
-        cols_to_show = [
-            'Total Return [%]', 'Win Rate [%]', 'Total Trades', 'Sharpe Ratio', 
-            'Calmar Ratio', 'Max Drawdown [%]', 'Avg Winning Trade [%]', 'Avg Losing Trade [%]'
-        ]
+        # --- GERAÇÃO DOS RANKINGS ---
         
+        # 1. TOP 10 por Lucratividade (Retorno Total)
         print("\n\n" + "="*80)
-        print("          RELATÓRIO CONSOLIDADO DE BACKTESTS")
+        print("          🏆 TOP 10 ATIVOS POR LUCRATIVIDADE (RETORNO TOTAL)")
         print("="*80)
-        print(df_summary[cols_to_show].sort_values(by='Sharpe Ratio', ascending=False))
+        df_top_lucro = df_report.sort_values(by='Retorno Total (%)', ascending=False).head(10)
+        print(df_top_lucro.to_string(index=False))
+        
+        # 2. TOP 10 por Frequência (Apenas ativos com lucro)
+        print("\n\n" + "="*80)
+        print("          ⚡ TOP 10 ATIVOS POR FREQUÊNCIA (COM LUCRO > 0)")
+        print("="*80)
+        df_lucrativos = df_report[df_report['Lucro Líquido (Cash)'] > 0]
+        if not df_lucrativos.empty:
+            df_top_freq = df_lucrativos.sort_values(by='Trades por Ano', ascending=False).head(10)
+            print(df_top_freq.to_string(index=False))
+        else:
+            print("Nenhum ativo lucrativo encontrado para o ranking de frequência.")
         print("="*80)
 
-        if last_pf:
-            print("\nGerando gráfico para o último ativo com trades...")
-            # A linha abaixo foi comentada para não gerar o output do gráfico no terminal.
-            # last_pf.plot().show()
+        # --- EXPORTAÇÃO DO RELATÓRIO COMPLETO ---
+        try:
+            report_dir = 'data/reports'
+            os.makedirs(report_dir, exist_ok=True)
+            report_path = os.path.join(report_dir, 'ranking_backtest.csv')
+            
+            # Ordena o relatório final pelo Sharpe Ratio antes de salvar
+            df_report_sorted = df_report.sort_values(by='Sharpe Ratio', ascending=False)
+            df_report_sorted.to_csv(report_path, index=False, float_format='%.2f')
+            
+            print(f"\n\n[ SUCESSO ] Relatório consolidado com {len(df_report)} ativos salvo em: {report_path}")
+        except Exception as e:
+            print(f"\n\n[ ERRO ] Falha ao salvar o relatório CSV: {e}")
+
     else:
-        print("\nNenhum backtest produziu resultados para ser consolidado.")
+        print("\nNenhum backtest produziu resultados para gerar um relatório.")

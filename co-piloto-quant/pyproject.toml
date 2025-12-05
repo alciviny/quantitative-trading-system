@@ -10,6 +10,9 @@ dependencies = [
     "pandas-ta>=0.3.0",
     "plotly>=5.0.0",
     "pandera>=0.15.0",
+    "streamlit",
+    "vectorbt",
+    "xlsxwriter",
 ]
 
 [project.optional-dependencies]
