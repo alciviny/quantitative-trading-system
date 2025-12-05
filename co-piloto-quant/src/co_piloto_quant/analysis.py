@@ -4,6 +4,8 @@ from co_piloto_quant.config import (PROCESSED_DATA_PATH, STOCH_K_PERIOD,
                                      STOCH_K_SMOOTH, STOCH_D_SMOOTH,
                                      SYSTEM_PERIOD, SYSTEM_DEVIATIONS,
                                      BB_PERIOD, PRICE_BB_DEVIATIONS)
+
+from co_piloto_quant.risk_regime import validate_market_regime # <--- ADICIONE ISSO
 from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
 from co_piloto_quant.indicators.special.half_life import calculate_rolling_ou_params
 from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
@@ -112,7 +114,7 @@ def calculate_indicators(
 
 # No arquivo src/co_piloto_quant/analysis.py
 
-def check_rules(latest_data: pd.Series) -> dict:
+
     """
     Verifica os sinais de compra/venda com uma camada de "Veto por Regime de Mercado".
     1. Filtra ativos com comportamento indesejado (lateral, ruidoso, sem sustentação).
@@ -196,6 +198,117 @@ def check_rules(latest_data: pd.Series) -> dict:
     sinal_venda_final = is_downtrend and is_in_sell_zone and is_stoch_sell and is_flow_sell
     
     # --- 3. MONTAGEM DO DICIONÁRIO DE RETORNO ---
+    motivo = "Aprovado no regime, sem gatilho técnico"
+    if sinal_compra_final:
+        motivo = "Aprovado para Compra"
+    elif sinal_venda_final:
+        motivo = "Aprovado para Venda (Short Sniper)"
+
+    return {
+        'Sinal_Compra': bool(sinal_compra_final),
+        'Sinal_Venda': bool(sinal_venda_final),
+        'Stop_Loss_Sugerido_Long': float(latest_data[bb_lower_0_45]) if sinal_compra_final else None,
+        'Stop_Loss_Sugerido_Short': float(latest_data[bb_upper_0_45]) if sinal_venda_final else None,
+        'Motivo_Bloqueio': motivo
+    }
+
+def check_rules(df: pd.DataFrame) -> dict:
+    """
+    Verifica sinais de compra/venda com uma camada de "Veto por Risco Sistêmico".
+    AGORA RECEBE O DATAFRAME INTEIRO para cálculos históricos de risco.
+    """
+    # 0. Validação Básica de Dados
+    if df.empty or len(df) < 20:
+        return {
+            'Sinal_Compra': False, 'Sinal_Venda': False, 
+            'Stop_Loss_Sugerido_Long': None, 'Stop_Loss_Sugerido_Short': None, 
+            'Motivo_Bloqueio': "Dados insuficientes ou vazios"
+        }
+
+    # --- 1. VETO DE RISCO (NOVO: Forensic Alpha) ---
+    # Verifica se o ativo está em um regime tóxico (Crash iminente ou Caos extremo)
+    risk_check = validate_market_regime(df)
+    
+    if not risk_check['approved']:
+        return {
+            'Sinal_Compra': False, 'Sinal_Venda': False, 
+            'Stop_Loss_Sugerido_Long': None, 'Stop_Loss_Sugerido_Short': None, 
+            'Motivo_Bloqueio': f"⛔ {risk_check['reason']}"
+        }
+
+    # --- 2. SELEÇÃO DA ÚLTIMA LINHA (Para análise pontual) ---
+    latest_data = df.iloc[-1]
+
+    # --- 3. VETO POR REGIME DE MERCADO ("Porteiros Clássicos") ---
+    hurst_col = 'Hurst_72_returns'
+    entropy_col = 'Entropy_20'
+    halflife_col = 'HalfLife_60'
+
+    # Checagem de colunas
+    regime_cols = [hurst_col, entropy_col, halflife_col]
+    if any(col not in latest_data or pd.isna(latest_data[col]) for col in regime_cols):
+        return {
+            'Sinal_Compra': False, 'Sinal_Venda': False, 'Stop_Loss_Sugerido_Long': None,
+            'Stop_Loss_Sugerido_Short': None, 'Motivo_Bloqueio': "Dados de regime Nulos"
+        }
+
+    # Regra 1: Filtro de Tendência (Hurst)
+    if latest_data[hurst_col] < 0.53:
+        return {
+            'Sinal_Compra': False, 'Sinal_Venda': False, 'Stop_Loss_Sugerido_Long': None,
+            'Stop_Loss_Sugerido_Short': None, 'Motivo_Bloqueio': f"Reprovado por Hurst Baixo: {latest_data[hurst_col]:.2f}"
+        }
+
+    # Regra 2: Filtro de Ruído (Entropia) 
+    if latest_data[entropy_col] > 3.2:
+        return {
+            'Sinal_Compra': False, 'Sinal_Venda': False, 'Stop_Loss_Sugerido_Long': None,
+            'Stop_Loss_Sugerido_Short': None, 'Motivo_Bloqueio': f"Reprovado por Entropia Alta: {latest_data[entropy_col]:.2f}"
+        }
+
+    # Regra 3: Filtro de Sustentabilidade (Half-Life)
+    if latest_data[halflife_col] < 15:
+        return {
+            'Sinal_Compra': False, 'Sinal_Venda': False, 'Stop_Loss_Sugerido_Long': None,
+            'Stop_Loss_Sugerido_Short': None, 'Motivo_Bloqueio': f"Reprovado por Half-Life Baixo: {latest_data[halflife_col]:.0f} dias"
+        }
+
+    # --- 4. LÓGICA DE SINAL TÉCNICO (Executada apenas se o ativo for aprovado) ---
+    wwma_200 = 'WWMA_200'
+    bb_upper_0_45 = f'BB_Upper_{BB_PERIOD}_0.45' 
+    bb_lower_0_45 = f'BB_Lower_{BB_PERIOD}_0.45'
+    bb_middle = f'BB_Middle_{BB_PERIOD}'
+    stoch_k = f'stoch_k_{STOCH_K_PERIOD}_{STOCH_K_SMOOTH}'
+    obtr = 'obtr'
+    wad = 'wad'
+    obtr_mid = 'obtr_bb_middle_band'
+    wad_mid = 'wad_bb_middle_band'
+    
+    strategy_cols = ['close', wwma_200, bb_upper_0_45, bb_lower_0_45, bb_middle, stoch_k, obtr, wad, obtr_mid, wad_mid]
+    if any(col not in latest_data or pd.isna(latest_data[col]) for col in strategy_cols):
+        return {
+            'Sinal_Compra': False, 'Sinal_Venda': False, 'Stop_Loss_Sugerido_Long': None,
+            'Stop_Loss_Sugerido_Short': None, 'Motivo_Bloqueio': "Dados de estratégia insuficientes"
+        }
+
+    # Lógica de Compra (Long)
+    # Zona de Valor: Preço entre BB Inferior (0.45) e BB Superior (0.45)
+    is_in_buy_zone = (latest_data['close'] >= latest_data[bb_lower_0_45]) and \
+                     (latest_data['close'] <= latest_data[bb_upper_0_45])
+    
+    is_stoch_buy = latest_data[stoch_k] < 30
+    is_flow_buy = (latest_data[obtr] > latest_data[obtr_mid]) or (latest_data[wad] > latest_data[wad_mid])
+    
+    sinal_compra_final = is_in_buy_zone and is_stoch_buy and is_flow_buy
+    
+    # Lógica de Venda (Short Sniper)
+    is_downtrend = latest_data['close'] < latest_data[wwma_200]
+    is_in_sell_zone = (latest_data['close'] >= latest_data[bb_lower_0_45]) and (latest_data['close'] <= latest_data[bb_middle])
+    is_stoch_sell = latest_data[stoch_k] > 70
+    is_flow_sell = latest_data[obtr] < latest_data[obtr_mid]
+    sinal_venda_final = is_downtrend and is_in_sell_zone and is_stoch_sell and is_flow_sell
+    
+    # --- 5. RESULTADO ---
     motivo = "Aprovado no regime, sem gatilho técnico"
     if sinal_compra_final:
         motivo = "Aprovado para Compra"

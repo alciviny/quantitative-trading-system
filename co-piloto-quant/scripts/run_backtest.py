@@ -2,9 +2,15 @@ import vectorbt as vbt
 import pandas as pd
 import numpy as np
 import warnings
+import os
+import logging
+from tqdm import tqdm
+import concurrent.futures
+from datetime import datetime
+
 from co_piloto_quant.data.database import load_price_data
 from co_piloto_quant.analysis import calculate_indicators
-from co_piloto_quant.utils import get_scanner_tickers
+from co_piloto_quant.utils import get_expanded_universe
 
 # --- CONFIGURAÇÕES DO BACKTEST ---
 INITIAL_CAPITAL = 100000
@@ -16,50 +22,41 @@ SLIPPAGE_PCT = 0.001
 BB_EXIT_STD_DEV = 2.0
 ENTROPY_CHAOS_THRESHOLD = 3.2  # Limite para o filtro de entropia
 
+# --- CONFIGURAÇÃO DE LOGS ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 # Ignorar avisos de cálculo do vectorbt
 warnings.filterwarnings('ignore')
 
 def run_vectorized_backtest(ticker: str):
     """
-    Executa um backtest totalmente vetorizado para um único ativo com saída dinâmica.
+    Executa um backtest totalmente vetorizado para um único ativo.
+    Esta função agora é mais limpa, sem prints diretos.
     """
-    print(f"\n--- Iniciando Backtest Vetorizado para {ticker} ---")
-    
     df_raw = load_price_data(ticker)
-    if df_raw.empty or len(df_raw) < 200:
-        print(f"Dados insuficientes para {ticker}.")
+    if df_raw is None or df_raw.empty or len(df_raw) < 200:
         return None
 
-    print(f"[{ticker}] Calculando indicadores complexos...")
     df = calculate_indicators(df_raw)
     
-    if df.empty:
-        print(f"[{ticker}] Falha ao calcular indicadores.")
+    if df is None or df.empty:
         return None
 
-    print(f"[{ticker}] Gerando sinais de forma vetorizada...")
-
-    # --- Lógica de ENTRADA ---
-    # TRIO DE FILTROS DE REGIME: Só operar em mercados com tendência, organização e sustentação.
+    # --- Lógica de ENTRADA (COMPRA) ---
     filtro_tendencia = df.get('Hurst_72_returns', pd.Series(0.0, index=df.index)) >= 0.53
-    filtro_caos = df.get('Entropy_20', pd.Series(999.0, index=df.index)) <= 3.2
+    filtro_caos = df.get('Entropy_20', pd.Series(999.0, index=df.index)) <= ENTROPY_CHAOS_THRESHOLD
     filtro_sustentacao = df.get('HalfLife_60', pd.Series(0.0, index=df.index)) >= 15
     regime_filter = filtro_tendencia & filtro_caos & filtro_sustentacao
     
-    # tendencia_alta = df['close'] > df['WWMA_200'] # REMOVIDO para permitir pullbacks
-
-    # NOVA "ZONA DE VALOR": Preço entre BB Inferior (0.45) e BB Superior (0.45)
     preco_na_zona_valor = (df['close'] >= df[f'BB_Lower_{200}_0.45']) & \
                           (df['close'] <= df[f'BB_Upper_{200}_0.45'])
     
-    # FILTRO DE INCLINAÇÃO DA WWMA PARA SEGURANÇA
     inclincao_wwma_positiva = df['WWMA_200'].diff(5) > 0
 
     fluxo_alta = (df['obtr'] > df['obtr_bb_middle_band']) | (df['wad'] > df['wad_bb_middle_band'])
-    # potencial_alta_tecnico = tendencia_alta & preco_na_metade_superior & fluxo_alta # ANTES
-    potencial_alta_tecnico = preco_na_zona_valor & inclincao_wwma_positiva & fluxo_alta # AGORA
+    potencial_alta_tecnico = preco_na_zona_valor & inclincao_wwma_positiva & fluxo_alta
     
-    # --- CRITÉRIO DE ENTRADA (ESTOCÁSTICO) ---
     stoch_k_col = 'stoch_k_80_3' 
     condicao_stoch_compra = df[stoch_k_col] < 30
     entries = potencial_alta_tecnico & regime_filter & condicao_stoch_compra
@@ -71,17 +68,10 @@ def run_vectorized_backtest(ticker: str):
     exits = take_profit_long | stop_loss_long
 
     # --- Lógica de ENTRADA (VENDA) ---
-    # A lógica de regime (ordem) é a mesma para compra e venda
     tendencia_baixa = df['close'] < df['WWMA_200']
-    
-    # CRITÉRIO DE ENTRADA NA BANDA DE BOLLINGER (VENDA)
-    # O preço deve estar na metade INFERIOR da banda com desvio de 0.45
     preco_na_metade_inferior = (df['close'] >= df[f'BB_Lower_{200}_0.45']) & (df['close'] <= df[f'BB_Middle_{200}'])
-    
     fluxo_baixa = (df['obtr'] < df['obtr_bb_middle_band']) | (df['wad'] < df['wad_bb_middle_band'])
     potencial_baixa_tecnico = tendencia_baixa & preco_na_metade_inferior & fluxo_baixa
-    
-    # --- CRITÉRIO DE ENTRADA (ESTOCÁSTICO) ---
     condicao_stoch_venda = df[stoch_k_col] > 70
     short_entries = potencial_baixa_tecnico & regime_filter & condicao_stoch_venda
 
@@ -91,58 +81,44 @@ def run_vectorized_backtest(ticker: str):
     stop_loss_short = df['close'] > df[f'BB_Upper_{200}_0.45']
     short_exits = take_profit_short | stop_loss_short
 
-
-    entries = entries.fillna(False)
-    exits = exits.fillna(False)
-    short_entries = short_entries.fillna(False)
-    short_exits = short_exits.fillna(False)
+    # Evitar look-ahead bias
+    entries = entries.shift(1).fillna(False)
+    exits = exits.shift(1).fillna(False)
+    short_entries = short_entries.shift(1).fillna(False)
+    short_exits = short_exits.shift(1).fillna(False)
     
-    # Verifica se existe algum sinal de entrada (compra ou venda)
-    if entries.sum() == 0 and short_entries.sum() == 0:
+    if not entries.any() and not short_entries.any():
         return None
 
-    print(f"[{ticker}] Executando simulação do portfólio...")
+    high_price = df.get('high', df['close'])
+    low_price = df.get('low', df['close'])
+
     portfolio = vbt.Portfolio.from_signals(
-        close=df['close'],
-        entries=entries,
-        exits=exits,
-        short_entries=short_entries,
-        short_exits=short_exits,
-        sl_stop=STOP_LOSS_PCT,
-        init_cash=INITIAL_CAPITAL,
-        fees=FEES_PCT,
-        slippage=SLIPPAGE_PCT,
-        freq='1D' 
+        close=df['close'], high=high_price, low=low_price,
+        entries=entries, exits=exits,
+        short_entries=short_entries, short_exits=short_exits,
+        sl_stop=STOP_LOSS_PCT, init_cash=INITIAL_CAPITAL,
+        fees=FEES_PCT, slippage=SLIPPAGE_PCT, freq='1D' 
     )
 
     return portfolio
 
-if __name__ == "__main__":
-    import os
-    from datetime import datetime
-
-    tickers = get_scanner_tickers() 
-    todos_resultados = []
-
-    print(f"--- INICIANDO BATCH DE BACKTESTS PARA {len(tickers)} ATIVOS ---")
-
-    for ticker in tickers:
+def process_single_ticker_backtest(ticker: str):
+    """
+    Função wrapper para executar o backtest de um único ativo.
+    Captura exceções, calcula estatísticas e retorna um dicionário leve.
+    """
+    try:
         pf = run_vectorized_backtest(ticker)
-        if pf:
+        if pf and pf.trades.count() > 0:
             stats = pf.stats()
-            if stats['Total Trades'] > 0:
             
-            # Cálculo de anos para a métrica de frequência
-                start_date = pd.to_datetime(stats['Start'])
-                end_date = pd.to_datetime(stats['End'])
-                anos_de_historico = (end_date - start_date).days / 365.25
+            start_date = pd.to_datetime(stats['Start'])
+            end_date = pd.to_datetime(stats['End'])
+            anos_de_historico = (end_date - start_date).days / 365.25
             
-            if anos_de_historico > 0:
-                trades_por_ano = stats['Total Trades'] / anos_de_historico
-            else:
-                trades_por_ano = 0
+            trades_por_ano = stats['Total Trades'] / anos_de_historico if anos_de_historico > 0 else 0
 
-            # Coleta dos dados para o relatório
             resultado = {
                 'Ticker': ticker,
                 'Retorno Total (%)': stats['Total Return [%]'],
@@ -153,26 +129,41 @@ if __name__ == "__main__":
                 'Max Drawdown (%)': stats['Max Drawdown [%]'],
                 'Trades por Ano': trades_por_ano
             }
-            todos_resultados.append(resultado)
-            
-            print(f"--- ✅ Backtest de {ticker} concluído com {stats['Total Trades']} trades. ---")
-        else:
-            print(f"--- ⚠️ Sem trades ou dados para {ticker}. ---")
+            return resultado
+    except Exception as e:
+        logger.error(f"Falha no backtest de {ticker}: {e}", exc_info=False)
+    
+    return None
+
+if __name__ == "__main__":
+    tickers = get_expanded_universe() 
+    todos_resultados = []
+
+    logger.info(f"--- INICIANDO BATCH DE BACKTESTS PARALELO PARA {len(tickers)} ATIVOS ---")
+    
+    # Usando ProcessPoolExecutor para paralelizar a carga de trabalho
+    with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
+        # Mapeia futuros para tickers para melhor logging se necessário
+        future_to_ticker = {executor.submit(process_single_ticker_backtest, ticker): ticker for ticker in tickers}
+        
+        # Processa os resultados à medida que são concluídos com uma barra de progresso
+        for future in tqdm(concurrent.futures.as_completed(future_to_ticker), total=len(tickers), desc="Executando Backtests"):
+            resultado = future.result()
+            if resultado:
+                todos_resultados.append(resultado)
+
+    logger.info(f"Processamento paralelo concluído. {len(todos_resultados)} ativos tiveram resultados.")
 
     if todos_resultados:
-        # Criação do DataFrame consolidado
         df_report = pd.DataFrame(todos_resultados)
         
         # --- GERAÇÃO DOS RANKINGS ---
-        
-        # 1. TOP 10 por Lucratividade (Retorno Total)
         print("\n\n" + "="*80)
         print("          🏆 TOP 10 ATIVOS POR LUCRATIVIDADE (RETORNO TOTAL)")
         print("="*80)
         df_top_lucro = df_report.sort_values(by='Retorno Total (%)', ascending=False).head(10)
         print(df_top_lucro.to_string(index=False))
         
-        # 2. TOP 10 por Frequência (Apenas ativos com lucro)
         print("\n\n" + "="*80)
         print("          ⚡ TOP 10 ATIVOS POR FREQUÊNCIA (COM LUCRO > 0)")
         print("="*80)
@@ -190,13 +181,12 @@ if __name__ == "__main__":
             os.makedirs(report_dir, exist_ok=True)
             report_path = os.path.join(report_dir, 'ranking_backtest.csv')
             
-            # Ordena o relatório final pelo Sharpe Ratio antes de salvar
             df_report_sorted = df_report.sort_values(by='Sharpe Ratio', ascending=False)
             df_report_sorted.to_csv(report_path, index=False, float_format='%.2f')
             
-            print(f"\n\n[ SUCESSO ] Relatório consolidado com {len(df_report)} ativos salvo em: {report_path}")
+            logger.info(f"Relatório consolidado com {len(df_report)} ativos salvo em: {report_path}")
         except Exception as e:
-            print(f"\n\n[ ERRO ] Falha ao salvar o relatório CSV: {e}")
+            logger.error(f"Falha ao salvar o relatório CSV: {e}")
 
     else:
-        print("\nNenhum backtest produziu resultados para gerar um relatório.")
+        logger.warning("Nenhum backtest produziu resultados para gerar um relatório.")

@@ -10,7 +10,7 @@ from co_piloto_quant.data.recorder import init_recorder_db, record_signal
 from co_piloto_quant.config import PROCESSED_DATA_PATH
 from co_piloto_quant.data.data_fetching import fetch_batch_data
 from co_piloto_quant.data.database import load_price_data
-from co_piloto_quant.utils import get_top_50_tickers
+from co_piloto_quant.utils import get_expanded_universe
 from co_piloto_quant.data.data_processing import process_data
 from co_piloto_quant.analysis import calculate_indicators, check_rules
 
@@ -45,7 +45,8 @@ def process_single_ticker(ticker):
         latest_data = df_with_indicators.iloc[-1]
 
         # Aplica as Regras
-        rules_check = check_rules(latest_data)
+       # LINHA 49 (Nova - Passando o DataFrame completo)
+        rules_check = check_rules(df_with_indicators)
 
         # Retorna os dados necessários para o processo principal
         return ticker, latest_data, rules_check
@@ -61,7 +62,7 @@ def run_scanner():
     usa a 'check_rules' para os sinais finais e recalcula os status secundários
     para um relatório de mercado detalhado.
     """
-    tickers = get_top_50_tickers()
+    tickers = get_expanded_universe()
     logger.info(f"Scanner iniciado para {len(tickers)} tickers.")
 
     # 1. Atualização da Base de Dados
