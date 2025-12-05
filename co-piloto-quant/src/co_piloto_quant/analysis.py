@@ -274,141 +274,61 @@ def check_rules(latest_data: pd.Series) -> dict:
  """
 
 def check_rules(latest_data: pd.Series) -> dict:
-    # --- 1. Definição de Nomes de Colunas e Parâmetros ---
+    """
+    Verifica os sinais de compra e venda com base na estratégia unificada de backtest.
+    A lógica é baseada em tendência, pullback para a 'meia banda' e confirmação do estocástico.
+    """
+    # --- 1. Definição de Nomes de Colunas ---
+    # É crucial que estes nomes correspondam exatamente aos gerados em 'calculate_indicators'
     period = 200
     wwma_200 = 'WWMA_200'
-    bb_upper_1_0 = f'BB_Upper_{period}_1.0'
-    bb_lower_1_0 = f'BB_Lower_{period}_1.0'
     bb_upper_0_45 = f'BB_Upper_{period}_0.45'
     bb_lower_0_45 = f'BB_Lower_{period}_0.45'
-    obtr_mid = 'obtr_bb_middle_band'
-    wad_mid = 'wad_bb_middle_band'
-    obtr_upper_0_45 = 'obtr_bb_upper_band_0_45'
-    obtr_lower_0_45 = 'obtr_bb_lower_band_0_45'
-    wad_upper_0_45 = 'wad_bb_upper_band_0_45'
-    wad_lower_0_45 = 'wad_bb_lower_band_0_45'
-    stoch_k = f'stoch_k_{STOCH_K_PERIOD}_{STOCH_K_SMOOTH}'
-    ifr = 'IFR_120'
-    hurst_col = f'Hurst_{HURST_WINDOW}_returns'
+    bb_middle = f'BB_Middle_{period}'
+    # O nome da coluna do estocástico deve ser o mesmo usado nos backtests
+    stoch_k = f'stoch_k_{STOCH_K_PERIOD}_{STOCH_K_SMOOTH}' 
 
-    # Verificação de segurança (se faltar dados, retorna vazio)
-    required_cols = [bb_upper_1_0, bb_lower_1_0, 'close', 'obtr', 'wad', wwma_200, stoch_k]
+    # --- 2. Verificação de Segurança ---
+    # Garante que todos os dados necessários para a decisão estão presentes.
+    required_cols = [
+        'close', wwma_200, bb_upper_0_45, bb_lower_0_45, bb_middle, stoch_k
+    ]
     if any(col not in latest_data or pd.isna(latest_data[col]) for col in required_cols):
-        return {} 
+        return {
+            'Sinal_Compra': False,
+            'Sinal_Venda': False,
+            'Stop_Loss_Sugerido_Long': None,
+            'Stop_Loss_Sugerido_Short': None,
+        }
 
-    # --- 2. Lógica Original (Sua Estrutura Antiga) ---
+    # --- 3. Lógica de Sinais (Exatamente como no Backtest) ---
+
+    # Condições de Compra (Long)
+    is_uptrend = latest_data['close'] > latest_data[wwma_200]
+    is_in_buy_zone = (latest_data['close'] <= latest_data[bb_upper_0_45]) and \
+                     (latest_data['close'] >= latest_data[bb_middle])
+    is_stoch_buy = latest_data[stoch_k] < 30
+
+    sinal_compra_final = is_uptrend and is_in_buy_zone and is_stoch_buy
+
+    # Condições de Venda (Short)
+    is_downtrend = latest_data['close'] < latest_data[wwma_200]
+    is_in_sell_zone = (latest_data['close'] >= latest_data[bb_lower_0_45]) and \
+                      (latest_data['close'] <= latest_data[bb_middle])
+    is_stoch_sell = latest_data[stoch_k] > 70
+
+    sinal_venda_final = is_downtrend and is_in_sell_zone and is_stoch_sell
     
-    # Regime (Hurst)
-    hurst_val = latest_data.get(hurst_col, 0.5)
-    is_trending = hurst_val > HURST_TREND_THRESHOLD  
-    is_mean_reversion = hurst_val < HURST_MEAN_REV_THRESHOLD
+    # --- 4. Definição de Stops Sugeridos ---
+    # O stop sugerido é a banda oposta da zona de entrada, que atuaria como
+    # uma invalidação da condição de 'meia banda'.
+    stop_long = latest_data[bb_lower_0_45]
+    stop_short = latest_data[bb_upper_0_45]
 
-    # Técnica (Preço e Fluxo)
-    preco_dentro_1_0 = (latest_data['close'] <= latest_data[bb_upper_1_0]) & (latest_data['close'] >= latest_data[bb_lower_1_0])
-    
-    # Alta
-    fluxo_alta = (latest_data['obtr'] > latest_data[obtr_mid]) | (latest_data['wad'] > latest_data[wad_mid])
-    tendencia_alta = latest_data['close'] > latest_data[wwma_200]
-    potencial_alta_tecnico = tendencia_alta & preco_dentro_1_0 & fluxo_alta
-
-    # Baixa
-    fluxo_baixa = (latest_data['obtr'] < latest_data[obtr_mid]) | (latest_data['wad'] < latest_data[wad_mid])
-    tendencia_baixa = latest_data['close'] < latest_data[wwma_200]
-    potencial_baixa_tecnico = tendencia_baixa & preco_dentro_1_0 & fluxo_baixa
-
-    # Squeeze e IFR
-    preco_squeeze = (latest_data['close'] <= latest_data[bb_upper_0_45]) & (latest_data['close'] >= latest_data[bb_lower_0_45])
-    wad_squeeze = (latest_data['wad'] <= latest_data[wad_upper_0_45]) & (latest_data['wad'] >= latest_data[wad_lower_0_45])
-    obtr_squeeze = (latest_data['obtr'] <= latest_data[obtr_upper_0_45]) & (latest_data['obtr'] >= latest_data[obtr_lower_0_45])
-    potencial_squeeze = preco_squeeze & (wad_squeeze | obtr_squeeze)
-
-    ifr_val = latest_data.get(ifr, 50)
-    ifr_neutro = (ifr_val >= 48) & (ifr_val <= 52)
-    squeeze_ifr_alta = ifr_neutro & (latest_data[stoch_k] < 30)
-    squeeze_ifr_baixa = ifr_neutro & (latest_data[stoch_k] > 70)
-
-    # Pullback Sniper (Half-Life & OU)
-    hl_val = latest_data.get('HalfLife_60', 1000)
-    r2_val = latest_data.get('R2_60', 0)
-    cond_elasticidade = (hl_val < 25) and (r2_val > 0.05)
-    sinal_pullback_sniper = cond_elasticidade and (hurst_val > 0.55) and (ifr_val < 48)
-
-    # Hilbert Sine Wave
-    sine = latest_data.get('Hilbert_Sine', 0)
-    lead = latest_data.get('Hilbert_Lead', 0)
-    periodo_ciclo = latest_data.get('Hilbert_Period', 20)
-    
-    ciclo_alta = sine > lead
-    ciclo_baixa = sine < lead
-    fundo_confirmado = sine < -0.7
-    topo_confirmado = sine > 0.7
-    ciclo_saudavel = (periodo_ciclo > 8) and (periodo_ciclo < 120)
-    sinal_entrada_ciclo = fundo_confirmado and ciclo_alta and ciclo_saudavel
-
-    # Status Hilbert (Texto)
-    hilbert_status = "Neutro"
-    if not ciclo_saudavel: hilbert_status = "Caótico"
-    elif fundo_confirmado and ciclo_alta: hilbert_status = "Virada (Fundo)"
-    elif topo_confirmado and ciclo_baixa: hilbert_status = "Virada (Topo)"
-    elif fundo_confirmado: hilbert_status = "Fundo Extremo"
-    elif topo_confirmado: hilbert_status = "Topo Extremo"
-    elif ciclo_alta: hilbert_status = "Subindo"
-    elif ciclo_baixa: hilbert_status = "Caindo"
-
-    # --- 3. NOVO: Integração da Entropia (Filtro de Qualidade) ---
-    
-    # Pega o valor calculado (se não existir, assume 10.0 que é 'risco alto' por padrão)
-    entropy_val = latest_data.get('Entropy_20', 10.0)
-    
-    # Define o limite (2.8 bits é um bom corte inicial para caos)
-    is_chaotic = entropy_val >= 3.2
-    is_orderly = not is_chaotic
-
-    # --- 4. Composição dos Sinais Finais ---
-
-    # Aqui mantemos a lógica original: Sinal Técnico + Regime de Tendência
-    sinal_compra_base = potencial_alta_tecnico and is_trending
-    sinal_venda_base = potencial_baixa_tecnico and is_trending
-
-    # Aplicamos o Filtro de Entropia (Opcional: se estiver caótico, o sinal final fica False)
-    # Se você quiser apenas ver o aviso, mas manter o sinal de compra, remova o "and is_orderly"
-    sinal_compra_final = sinal_compra_base and is_orderly
-    sinal_venda_final = sinal_venda_base and is_orderly
-
+    # --- 5. Montagem do Dicionário de Retorno ---
     return {
-        # Sinais de Ação (Já filtrados pela Entropia para segurança)
         'Sinal_Compra': bool(sinal_compra_final),
         'Sinal_Venda': bool(sinal_venda_final),
-        
-        # Sinais de Potencial (Lógica antiga PURA, para você saber que o setup técnico existe)
-        'Potencial_Alta_Tecnico': bool(potencial_alta_tecnico),
-        'Potencial_Baixa_Tecnico': bool(potencial_baixa_tecnico),
-        
-        # Auxiliares Antigos
-        'Potencial_Alta': bool(sinal_compra_base), # Base sem filtro de entropia
-        'Potencial_Baixa': bool(sinal_venda_base), # Base sem filtro de entropia
-        'Potencial_Squeeze': bool(potencial_squeeze),
-        'Squeeze_IFR_Alta': bool(squeeze_ifr_alta),
-        'Squeeze_IFR_Baixa': bool(squeeze_ifr_baixa),
-        
-        # Regimes
-        'Regime_Tendencia': bool(is_trending),
-        'Regime_Lateral': bool(is_mean_reversion),
-        'Hurst_Score': float(hurst_val),
-        
-        # --- NOVOS CAMPOS PARA O SCANNER ---
-        'Regime_Caotico': bool(is_chaotic),   # Vai aparecer TRUE se o mercado estiver sujo
-        'Entropy_Score': float(entropy_val),  # O valor numérico para você calibrar
-        # -----------------------------------
-
-        # Outros indicadores
-        'Filtro_Consolidacao': bool(preco_dentro_1_0),
-        'Preco_Em_Compressao': bool(preco_squeeze),
-        'Sinal_Pullback_Sniper': bool(sinal_pullback_sniper),
-        'Half_Life_Val': float(hl_val),
-        'OU_R2': float(r2_val),
-        'Sinal_Entrada_Ciclo': bool(sinal_entrada_ciclo),
-        'Hilbert_Ciclo': hilbert_status,
-        'Hilbert_Sine': float(sine),
-        'Hilbert_Periodo': float(periodo_ciclo)
+        'Stop_Loss_Sugerido_Long': float(stop_long) if sinal_compra_final else None,
+        'Stop_Loss_Sugerido_Short': float(stop_short) if sinal_venda_final else None,
     }
