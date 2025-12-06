@@ -154,6 +154,17 @@ class FeatureEngineer:
                         except Exception:
                             features[f'{name}_AC1'] = 0.0
 
+            # NOVA CAPTURA: Features Z-Score Profissionais (Vindas do analysis.py atualizado)
+            z_cols = ['Entropy_Z', 'Hurst_Z', 'VolVol_Z']
+            for z_col in z_cols:
+                if z_col in df_ind.columns:
+                    series_z = df_ind[z_col].dropna()
+                    if len(series_z) > 10:
+                        features[f'{z_col}_Last'] = float(series_z.iloc[-1])
+                        features[f'{z_col}_Mean'] = float(series_z.mean())
+                        # Max Z-Score atingido no período (foi um pico de anomalia?)
+                        features[f'{z_col}_Max'] = float(series_z.max())
+
             # Volatilidade e Vol-of-Vol (robusto)
             if 'close' in df_ind.columns:
                 close = df_ind['close']
