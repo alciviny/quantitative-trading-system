@@ -46,45 +46,48 @@ def calculate_vol_of_vol(price_series: pd.Series, window: int = 20) -> float:
 def validate_market_regime(df_indicators: pd.DataFrame) -> dict:
     """
     Aplica os filtros de segurança descobertos pela análise forense (SHAP).
-    
-    Retorna:
-        dict: {'approved': bool, 'reason': str}
+    Agora com dupla camada de proteção: VolVol (Estabilidade) e Raw Vol (Turbulência).
+    Retorna: dict: {'approved': bool, 'reason': str}
     """
-    # Proteção contra DataFrame vazio
-    if df_indicators.empty or len(df_indicators) < 20:
+    # 1. Proteção contra DataFrame vazio ou pequeno
+    if df_indicators.empty or len(df_indicators) < 22: # Aumentado para segurança dos cálculos
         return {'approved': False, 'reason': 'Dados insuficientes'}
 
-    last_row = df_indicators.iloc[-1]
-    
-    # -----------------------------------------------------------
-    # 1. FILTRO DE VOLATILIDADE DA VOLATILIDADE (O "Anti-Crash")
-    # -----------------------------------------------------------
-    # Se o Forensic Tool indicou que VolVol > 0.045 causa falha:
-    vol_vol = calculate_vol_of_vol(df_indicators['close'])
-    
-    # AJUSTE ESTE VALOR COM BASE NO SEU RESULTADO DO FORENSIC TOOL
-    LIMIT_VOL_VOL = 0.045 
+    close_prices = df_indicators['close']
+    returns = close_prices.pct_change()
+
+    # --- VACINA 1: ANTI-CRASH (INSTABILIDADE ESTRUTURAL) ---
+    vol_vol = calculate_vol_of_vol(close_prices)
+    LIMIT_VOL_VOL = 0.030  # Limite ajustado
     
     if vol_vol > LIMIT_VOL_VOL: 
         return {
             'approved': False, 
-            'reason': f'Risco de Crash: Vol-of-Vol Alta ({vol_vol:.3f} > {LIMIT_VOL_VOL})'
+            'reason': f'CRASH ALERT: Volatilidade Instável ({vol_vol:.3f} > {LIMIT_VOL_VOL})'
         }
 
-    # -----------------------------------------------------------
-    # 2. FILTRO DE ENTROPIA (O "Anti-Ruído")
-    # -----------------------------------------------------------
-    # Verifica se a coluna existe antes de testar
-    if 'Entropy_20' in last_row:
+    # --- VACINA 2: ANTI-TURBULÊNCIA (RUÍDO EXCESSIVO) ---
+    current_vol = returns.rolling(20).std().iloc[-1]
+    LIMIT_RAW_VOL = 0.035 # Limite de 3.5% de vol diária
+
+    if current_vol > LIMIT_RAW_VOL:
+        return {
+            'approved': False,
+            'reason': f'TURBULÊNCIA: Volatilidade Recente Alta ({current_vol:.3f} > {LIMIT_RAW_VOL})'
+        }
+
+    # 3. FILTRO DE ENTROPIA (O "Anti-Ruído")
+    last_row = df_indicators.iloc[-1]
+    
+    if 'Entropy_20' in last_row and not pd.isna(last_row['Entropy_20']):
         entropy = last_row['Entropy_20']
-        # AJUSTE ESTE VALOR COM BASE NO SEU RESULTADO DO FORENSIC TOOL
-        LIMIT_ENTROPY = 3.15 
+        LIMIT_ENTROPY = 3.2 
         
         if entropy > LIMIT_ENTROPY:
-            return {
-                'approved': False, 
-                'reason': f'Mercado Caótico: Entropia Alta ({entropy:.2f} > {LIMIT_ENTROPY})'
-            }
+             return {
+                 'approved': False, 
+                 'reason': f'Caos Extremo: Entropia Alta ({entropy:.2f} > {LIMIT_ENTROPY})'
+             }
 
     # Se passou por tudo:
     return {'approved': True, 'reason': 'Regime Seguro'}

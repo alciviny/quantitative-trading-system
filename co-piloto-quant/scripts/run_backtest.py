@@ -11,6 +11,7 @@ from datetime import datetime
 from co_piloto_quant.data.database import load_price_data
 from co_piloto_quant.analysis import calculate_indicators
 from co_piloto_quant.utils import get_expanded_universe
+from co_piloto_quant.risk_regime import calculate_vol_of_vol # Instrução 1: Importar
 
 # --- CONFIGURAÇÕES DO BACKTEST ---
 INITIAL_CAPITAL = 100000
@@ -20,7 +21,9 @@ SLIPPAGE_PCT = 0.001
 
 # --- CONFIGURAÇÕES DA ESTRATÉGIA ---
 BB_EXIT_STD_DEV = 2.0
-ENTROPY_CHAOS_THRESHOLD = 3.2  # Limite para o filtro de entropia
+ENTROPY_CHAOS_THRESHOLD = 3.2
+LIMIT_VOL_VOL = 0.030 # AJUSTE FINO: Apertado de 0.040 para 0.030
+LIMIT_RAW_VOL = 0.035 # NOVO: Filtro de Volatilidade Pura (Anti-Turbulência)
 
 # --- CONFIGURAÇÃO DE LOGS ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -32,7 +35,6 @@ warnings.filterwarnings('ignore')
 def run_vectorized_backtest(ticker: str):
     """
     Executa um backtest totalmente vetorizado para um único ativo.
-    Esta função agora é mais limpa, sem prints diretos.
     """
     df_raw = load_price_data(ticker)
     if df_raw is None or df_raw.empty or len(df_raw) < 200:
@@ -43,14 +45,28 @@ def run_vectorized_backtest(ticker: str):
     if df is None or df.empty:
         return None
 
+    # --- DUPLA CAMADA DE SEGURANÇA VETORIZADA ---
+    returns = df['close'].pct_change()
+    
+    # 1. Filtro de VolVol (Anti-Crash)
+    df['VolVol'] = returns.rolling(20).std().diff().abs()
+    vol_vol_cond = df['VolVol'] <= LIMIT_VOL_VOL
+    
+    # 2. Filtro de Vol Pura (Anti-Turbulência)
+    df['RawVol'] = returns.rolling(20).std()
+    raw_vol_cond = df['RawVol'] <= LIMIT_RAW_VOL
+
+    # Máscara final: Ambas as condições devem ser verdadeiras
+    risk_safe = vol_vol_cond & raw_vol_cond
+    
     # --- Lógica de ENTRADA (COMPRA) ---
     filtro_tendencia = df.get('Hurst_72_returns', pd.Series(0.0, index=df.index)) >= 0.53
     filtro_caos = df.get('Entropy_20', pd.Series(999.0, index=df.index)) <= ENTROPY_CHAOS_THRESHOLD
     filtro_sustentacao = df.get('HalfLife_60', pd.Series(0.0, index=df.index)) >= 15
     regime_filter = filtro_tendencia & filtro_caos & filtro_sustentacao
     
-    preco_na_zona_valor = (df['close'] >= df[f'BB_Lower_{200}_0.45']) & \
-                          (df['close'] <= df[f'BB_Upper_{200}_0.45'])
+    preco_na_zona_valor = (df['close'] >= df[f'BB_Lower_200_0.45']) & \
+                          (df['close'] <= df[f'BB_Upper_200_0.45'])
     
     inclincao_wwma_positiva = df['WWMA_200'].diff(5) > 0
 
@@ -59,27 +75,33 @@ def run_vectorized_backtest(ticker: str):
     
     stoch_k_col = 'stoch_k_80_3' 
     condicao_stoch_compra = df[stoch_k_col] < 30
-    entries = potencial_alta_tecnico & regime_filter & condicao_stoch_compra
+    
+    # APLICAÇÃO DO FILTRO DE RISCO COMBINADO
+    entries = potencial_alta_tecnico & regime_filter & condicao_stoch_compra & risk_safe
 
     # --- Lógica de SAÍDA (COMPRA) ---
-    bb_exit_col = f'BB_Upper_{200}_{BB_EXIT_STD_DEV}'
+    bb_exit_col = f'BB_Upper_200_{BB_EXIT_STD_DEV}'
     take_profit_long = df['close'] >= df[bb_exit_col]
-    stop_loss_long = df['close'] < df[f'BB_Lower_{200}_0.45']
-    exits = take_profit_long | stop_loss_long
+    stop_loss_long = df['close'] < df[f'BB_Lower_200_0.45']
+    # Instrução 3 (Opcional): SAÍDA DE EMERGÊNCIA POR RISCO
+    exits = take_profit_long | stop_loss_long | (~risk_safe)
 
     # --- Lógica de ENTRADA (VENDA) ---
     tendencia_baixa = df['close'] < df['WWMA_200']
-    preco_na_metade_inferior = (df['close'] >= df[f'BB_Lower_{200}_0.45']) & (df['close'] <= df[f'BB_Middle_{200}'])
+    preco_na_metade_inferior = (df['close'] >= df[f'BB_Lower_200_0.45']) & (df['close'] <= df[f'BB_Middle_200'])
     fluxo_baixa = (df['obtr'] < df['obtr_bb_middle_band']) | (df['wad'] < df['wad_bb_middle_band'])
     potencial_baixa_tecnico = tendencia_baixa & preco_na_metade_inferior & fluxo_baixa
     condicao_stoch_venda = df[stoch_k_col] > 70
-    short_entries = potencial_baixa_tecnico & regime_filter & condicao_stoch_venda
+
+    # Instrução 3: APLICAÇÃO DO FILTRO DE RISCO
+    short_entries = potencial_baixa_tecnico & regime_filter & condicao_stoch_venda & risk_safe
 
     # --- Lógica de SAÍDA (VENDA) ---
-    bb_short_exit_col = f'BB_Lower_{200}_{BB_EXIT_STD_DEV}'
+    bb_short_exit_col = f'BB_Lower_200_{BB_EXIT_STD_DEV}'
     take_profit_short = df['close'] <= df[bb_short_exit_col]
-    stop_loss_short = df['close'] > df[f'BB_Upper_{200}_0.45']
-    short_exits = take_profit_short | stop_loss_short
+    stop_loss_short = df['close'] > df[f'BB_Upper_200_0.45']
+    # Instrução 3 (Opcional): SAÍDA DE EMERGÊNCIA POR RISCO
+    short_exits = take_profit_short | stop_loss_short | (~risk_safe)
 
     # Evitar look-ahead bias
     entries = entries.shift(1).fillna(False)
