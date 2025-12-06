@@ -2,10 +2,9 @@ import pandas as pd
 import numpy as np
 import logging
 
-# Configura o logger
 logger = logging.getLogger(__name__)
 
-# --- Importação Segura do MAD (Compatibilidade entre versões do Scipy) ---
+# --- Importação Segura do MAD ---
 try:
     from scipy.stats import median_abs_deviation
 except ImportError:
@@ -15,79 +14,57 @@ except ImportError:
         median_abs_deviation = None
 
 def calculate_vol_of_vol(price_series: pd.Series, window: int = 20) -> float:
-    """
-    Calcula a Volatilidade da Volatilidade (Medo de 2ª ordem).
-    Cópia utilitária para evitar dependência circular com o script de forensics.
-    """
+    # (Mantém a mesma lógica de cálculo de VolVol que já funciona bem)
     try:
-        if len(price_series) < window + 2:
-            return 0.0
-            
+        if len(price_series) < window + 2: return 0.0
         returns = price_series.pct_change().dropna()
         vol = returns.rolling(window).std().dropna()
-        
-        if len(vol) < 2:
-            return 0.0
-            
+        if len(vol) < 2: return 0.0
         vol_diff = vol.diff().dropna()
-        
-        # Cálculo robusto usando MAD
         if median_abs_deviation:
             mad = median_abs_deviation(vol_diff, scale='normal')
         else:
-            # Fallback manual se scipy falhar
             mad = np.median(np.abs(vol_diff - np.median(vol_diff)))
-            
         return float(mad) if not np.isnan(mad) else 0.0
-    except Exception as e:
-        logger.warning(f"Erro ao calcular VolVol: {e}")
+    except Exception:
         return 0.0
 
 def validate_market_regime(df_indicators: pd.DataFrame) -> dict:
     """
-    Aplica os filtros de segurança descobertos pela análise forense (SHAP).
-    Agora com dupla camada de proteção: VolVol (Estabilidade) e Raw Vol (Turbulência).
-    Retorna: dict: {'approved': bool, 'reason': str}
+    Sistema Híbrido de Validação de Risco:
+    Combina Limites Absolutos (do Detect Toxicity) + Limites Relativos (Z-Score).
     """
-    # 1. Proteção contra DataFrame vazio ou pequeno
-    if df_indicators.empty or len(df_indicators) < 22: # Aumentado para segurança dos cálculos
+    if df_indicators.empty or len(df_indicators) < 200:
+        if len(df_indicators) > 50:
+             return {'approved': True, 'reason': 'Modo Aprendizado (Dados < 200)'}
         return {'approved': False, 'reason': 'Dados insuficientes'}
 
-    close_prices = df_indicators['close']
-    returns = close_prices.pct_change()
+    latest = df_indicators.iloc[-1]
 
-    # --- VACINA 1: ANTI-CRASH (INSTABILIDADE ESTRUTURAL) ---
-    vol_vol = calculate_vol_of_vol(close_prices)
-    LIMIT_VOL_VOL = 0.030  # Limite ajustado
+    # --- CAMADA 1: LIMITES ABSOLUTOS (A "Herança" do seu Detect Toxicity) ---
+    # Esses números vêm da sua pesquisa forense anterior. São o "Teto de Vidro".
     
-    if vol_vol > LIMIT_VOL_VOL: 
-        return {
-            'approved': False, 
-            'reason': f'CRASH ALERT: Volatilidade Instável ({vol_vol:.3f} > {LIMIT_VOL_VOL})'
-        }
+    # Regra Forense 1: Entropia > 3.2 é tóxica
+    if 'Entropy_20' in latest and latest['Entropy_20'] > 3.2:
+        return {'approved': False, 'reason': f'TETO ABSOLUTO: Entropia Tóxica ({latest["Entropy_20"]:.2f} > 3.2)'}
 
-    # --- VACINA 2: ANTI-TURBULÊNCIA (RUÍDO EXCESSIVO) ---
+    # Regra Forense 2: Volatilidade Pura > 3.5% ao dia é perigoso
+    returns = df_indicators['close'].pct_change()
     current_vol = returns.rolling(20).std().iloc[-1]
-    LIMIT_RAW_VOL = 0.035 # Limite de 3.5% de vol diária
+    if current_vol > 0.035:
+        return {'approved': False, 'reason': f'TETO ABSOLUTO: Volatilidade Alta ({current_vol:.1%})'}
 
-    if current_vol > LIMIT_RAW_VOL:
-        return {
-            'approved': False,
-            'reason': f'TURBULÊNCIA: Volatilidade Recente Alta ({current_vol:.3f} > {LIMIT_RAW_VOL})'
-        }
 
-    # 3. FILTRO DE ENTROPIA (O "Anti-Ruído")
-    last_row = df_indicators.iloc[-1]
+    # --- CAMADA 2: LIMITES RELATIVOS (A Inteligência Z-Score) ---
+    # Esses pegam mudanças de comportamento ANTES de bater no teto.
     
-    if 'Entropy_20' in last_row and not pd.isna(last_row['Entropy_20']):
-        entropy = last_row['Entropy_20']
-        LIMIT_ENTROPY = 3.2 
-        
-        if entropy > LIMIT_ENTROPY:
-             return {
-                 'approved': False, 
-                 'reason': f'Caos Extremo: Entropia Alta ({entropy:.2f} > {LIMIT_ENTROPY})'
-             }
+    # Regra Quant 1: VolVol Z-Score (Instabilidade súbita)
+    if 'VolVol_Z' in latest and latest['VolVol_Z'] > 3.0:
+        return {'approved': False, 'reason': f'ANOMALIA: Instabilidade Extrema (Z: {latest["VolVol_Z"]:.1f}σ)'}
 
-    # Se passou por tudo:
-    return {'approved': True, 'reason': 'Regime Seguro'}
+    # Regra Quant 2: Entropia Z-Score (Ativo ficando "estranho" para o padrão dele)
+    # Note que aqui somos mais flexíveis (2.0 sigmas) porque já temos o teto de 3.2
+    if 'Entropy_Z' in latest and latest['Entropy_Z'] > 2.0:
+        return {'approved': False, 'reason': f'ANOMALIA: Comportamento Anômalo (Z: {latest["Entropy_Z"]:.1f}σ)'}
+
+    return {'approved': True, 'reason': 'Seguro (Híbrido)'}
