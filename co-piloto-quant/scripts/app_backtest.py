@@ -10,6 +10,7 @@ import streamlit as st
 import pandas as pd
 import vectorbt as vbt
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Importações do projeto
 from co_piloto_quant.data.database import load_price_data
@@ -28,39 +29,23 @@ def to_excel(df_parametros, df_metricas, df_trades):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_parametros.to_excel(writer, sheet_name='Parametros', index=False)
-        
-        # Ensure df_metricas is a DataFrame before writing and mapping
-        if isinstance(df_metricas, pd.Series):
-            df_metricas_df = df_metricas.to_frame() # Convert Series to DataFrame
-        else:
-            df_metricas_df = df_metricas
-
+        df_metricas_df = df_metricas.to_frame() if isinstance(df_metricas, pd.Series) else df_metricas
         df_metricas_df.to_excel(writer, sheet_name='Metricas')
         if not df_trades.empty:
             df_trades.to_excel(writer, sheet_name='Trades', index=False)
-        # Map sheet names to their corresponding dataframes for auto-adjustment
-        dataframes_map = {
-            'Parametros': df_parametros,
-            'Metricas': df_metricas_df,
-        }
-        if not df_trades.empty:
-            dataframes_map['Trades'] = df_trades
-
         # Auto-ajuste da largura das colunas
-        for sheet_name, current_df in dataframes_map.items():
-            worksheet = writer.sheets[sheet_name]
-            if not current_df.empty and not current_df.columns.empty:
+        for sheet_name, current_df in {'Parametros': df_parametros, 'Metricas': df_metricas_df, 'Trades': df_trades}.items():
+            if not current_df.empty:
+                worksheet = writer.sheets[sheet_name]
                 for idx, col_name in enumerate(current_df.columns):
-                    # Get data for the current column, including header
                     series = pd.Series([col_name] + current_df[col_name].astype(str).tolist())
-                    max_len = series.astype(str).map(len).max() + 2 # Calculate max length
+                    max_len = series.map(len).max() + 2
                     worksheet.set_column(idx, idx, max_len)
-    processed_data = output.getvalue()
-    return processed_data
+    return output.getvalue()
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Laboratório Quant", layout="wide")
-st.title("jEstratégia Quant System TPM")
+st.set_page_config(page_title="Laboratório Quant (Dupla Blindagem)", layout="wide")
+st.title("🛡️ Estratégia Quant System TPM (Dupla Camada de Segurança)")
 
 # --- BARRA LATERAL ---
 st.sidebar.header("⚙️ Parâmetros de Backtest")
@@ -70,204 +55,121 @@ if not tickers_list:
     st.error("Nenhum dado de ticker encontrado. Rode o pipeline de dados primeiro.")
     st.stop()
 
-ticker = st.sidebar.selectbox("Ativo", tickers_list, index=0)
+ticker = st.sidebar.selectbox("Ativo", tickers_list, index=tickers_list.index('PETR4') if 'PETR4' in tickers_list else 0)
 
-# Opções de Estratégia
 st.sidebar.subheader("Estratégia Principal")
 enable_short = st.sidebar.checkbox("Habilitar Operações Short (Venda)", value=True)
-usar_filtro_inclinacao = st.sidebar.checkbox("Exigir Inclinação da Média (Slope)", value=True)
-use_stoch_filter = st.sidebar.checkbox("Usar Filtro Estocástico (Gatilho Exaustão)", value=True)
-bb_exit_std = st.sidebar.slider("Take Profit (Long): Banda (Desvios)", 1.0, 4.0, 2.0, 0.1)
+use_stoch_filter = st.sidebar.checkbox("Usar Filtro Estocástico (Exaustão)", value=True)
+bb_exit_std = st.sidebar.slider("Take Profit: Banda (Desvios)", 1.0, 4.0, 2.0, 0.1)
 bb_entry_std = st.sidebar.slider("Entry Zone: Banda (Desvios)", 0.1, 1.0, 0.45, 0.05)
-sl_stop = st.sidebar.slider("Stop Loss de Emergência (%)", 1, 20, 10, 1) / 100.0
+sl_stop = st.sidebar.slider("Stop Loss Fixo (%)", 1, 20, 10, 1) / 100.0
 
-st.sidebar.subheader("Parâmetros do Estocástico") # New subheader
-stoch_k_window = st.sidebar.slider("Janela %K Estocástico", min_value=5, max_value=200, value=80, step=1)
-stoch_d_window = st.sidebar.slider("Janela %D Estocástico", min_value=1, max_value=20, value=3, step=1)
+st.sidebar.subheader("Parâmetros do Estocástico")
+stoch_k_window = st.sidebar.slider("Janela %K", 5, 200, 80, 1)
+stoch_d_window = st.sidebar.slider("Janela %D", 1, 20, 3, 1)
+
+# --- FILTROS DE RISCO ---
+st.sidebar.divider()
+st.sidebar.subheader("🛡️ Dupla Camada de Segurança")
+use_risk_filters = st.sidebar.checkbox("Ativar Filtros de Risco", value=True)
+volvol_limit = st.sidebar.number_input("Limite Vol-of-Vol (Anti-Crash)", 0.010, 0.100, 0.030, 0.001, format="%.3f")
+vol_raw_limit = st.sidebar.number_input("Limite Vol Pura (Anti-Turbulência)", 0.010, 0.100, 0.035, 0.001, format="%.3f")
 
 # Opções de Filtro de Regime
 st.sidebar.divider()
 st.sidebar.subheader("Filtros de Regime de Mercado")
-use_hurst_filter = st.sidebar.checkbox("Ativar Filtro Hurst", value=True)
-use_entropy_filter = st.sidebar.checkbox("Ativar Filtro Entropia", value=True)
-use_halflife_filter = st.sidebar.checkbox("Ativar Filtro Half-Life", value=True)
+use_hurst_filter = st.sidebar.checkbox("Ativar Filtro Hurst (Tendência)", value=True)
+use_entropy_filter = st.sidebar.checkbox("Ativar Filtro Entropia (Ruído)", value=True)
+use_halflife_filter = st.sidebar.checkbox("Ativar Filtro Half-Life (Sustentação)", value=True)
 
-col1, col2 = st.sidebar.columns(2)
-hurst_window = col1.number_input("Janela Hurst", min_value=10, max_value=252, value=72, step=1)
-hurst_threshold = col2.number_input("Corte Hurst >=", min_value=0.0, max_value=1.0, value=0.53, step=0.01)
-
-col3, col4 = st.sidebar.columns(2)
-entropy_window = col3.number_input("Janela Entropia", min_value=5, max_value=100, value=20, step=1)
-entropy_threshold = col4.number_input("Corte Entropia <=", min_value=0.0, max_value=10.0, value=3.2, step=0.1)
-
-col5, col6 = st.sidebar.columns(2)
-halflife_window = col5.number_input("Janela Half-Life", min_value=10, max_value=252, value=60, step=1)
-halflife_threshold = col6.number_input("Corte Half-Life >=", min_value=0, max_value=200, value=15, step=1)
-
-
-if st.sidebar.button("RODAR SIMULAÇÃO"):
+if st.sidebar.button("RODAR SIMULAÇÃO", use_container_width=True):
     with st.spinner(f"Simulando {ticker}..."):
-        # 1. Carregar Dados
         df_raw = load_price_data(ticker)
-        if df_raw.empty:
-            st.error("Dados não encontrados para o ativo. Rode o pipeline de dados primeiro.")
-            st.stop()
+        if df_raw.empty: st.error("Dados não encontrados."); st.stop()
 
-        # 2. Calcular Indicadores
-        try:
-            df = calculate_indicators(
-                df_raw,
-                hurst_window=hurst_window,
-                entropy_window=entropy_window,
-                halflife_window=halflife_window,
-                stoch_k_window=stoch_k_window,
-                stoch_d_window=stoch_d_window,
-                bb_entry_deviation=bb_entry_std # Passa o desvio da banda de entrada
-            )
-        except Exception as e:
-            st.error(f"Erro ao calcular indicadores: {e}")
-            st.stop()
+        df = calculate_indicators(df_raw, 72, 20, 60, stoch_k_window, stoch_d_window, bb_entry_std)
+        if df.empty: st.error("Erro ao calcular indicadores."); st.stop()
 
-        # Extrair séries
         close = df['close']
-        open_price = df['open']
-        high_price = df['high']
-        low_price = df['low']
-        wwma_200 = df['WWMA_200']
-        obtr = df['obtr']
-        obtr_mid = df['obtr_bb_middle_band']
-        stoch_k = df[f'stoch_k_{stoch_k_window}_{STOCH_K_SMOOTH}']
-        bb_upper_entry = df[f'BB_Upper_{200}_{bb_entry_std}']
-        bb_middle = df[f'BB_Middle_{200}']
-        bb_lower_entry = df[f'BB_Lower_{200}_{bb_entry_std}']
+        returns = close.pct_change()
 
-        # Cálculo da inclinação da WWMA_200
-        if usar_filtro_inclinacao:
-            inclinacao_positiva = wwma_200.diff(5) > 0
-            inclinacao_negativa = wwma_200.diff(5) < 0
-        else:
-            inclinacao_positiva = pd.Series(True, index=df.index) # Não aplica filtro
-            inclinacao_negativa = pd.Series(True, index=df.index) # Não aplica filtro
-
-        # 3. Lógica de Trading
-        regime_filter = pd.Series(True, index=df.index) # Start with all True
-
-        if use_hurst_filter:
-            filtro_tendencia = df[f'Hurst_{hurst_window}_returns'] >= hurst_threshold
-            regime_filter &= filtro_tendencia
-        if use_entropy_filter:
-            filtro_caos = df[f'Entropy_{entropy_window}'] <= entropy_threshold
-            regime_filter &= filtro_caos
-        if use_halflife_filter:
-            filtro_sustentacao = df[f'HalfLife_{halflife_window}'] >= halflife_threshold
-            regime_filter &= filtro_sustentacao
-
-        # --- LÓGICA LONG ---
-        # NOVA "ZONA DE VALOR": Preço entre BB Inferior (bb_lower_entry) e BB Superior (bb_upper_entry)
-        regras_tecnicas_long = ((close >= bb_lower_entry) & (close <= bb_upper_entry)) & (obtr > obtr_mid) & inclinacao_positiva
-
-        if use_stoch_filter:
-            regras_tecnicas_long &= (stoch_k < 30)
-        long_entries = regras_tecnicas_long & regime_filter
+        # --- CÁLCULO DA DUPLA CAMADA DE RISCO ---
+        vol_vol = returns.rolling(20).std().diff().abs()
+        vol_raw = returns.rolling(20).std()
         
-        rolling_mean = close.rolling(window=200).mean()
-        rolling_std = close.rolling(window=200).std()
-        bb_upper_exit = rolling_mean + (bb_exit_std * rolling_std)
-        long_exits = close >= bb_upper_exit
+        risk_safe = pd.Series(True, index=df.index)
+        if use_risk_filters:
+            cond1 = vol_vol <= volvol_limit
+            cond2 = vol_raw <= vol_raw_limit
+            risk_safe = cond1 & cond2
 
-        # --- LÓGICA SHORT ---
+        # --- LÓGICA DE TRADING ---
+        regime_filter = pd.Series(True, index=df.index)
+        if use_hurst_filter: regime_filter &= (df['Hurst_72_returns'] >= 0.53)
+        if use_entropy_filter: regime_filter &= (df['Entropy_20'] <= 3.2)
+        if use_halflife_filter: regime_filter &= (df['HalfLife_60'] >= 15)
+
+        # Lógica Long
+        regras_tecnicas_long = (close <= df[f'BB_Upper_{200}_{bb_entry_std}']) & (df['obtr'] > df['obtr_bb_middle_band'])
+        if use_stoch_filter: regras_tecnicas_long &= (df[f'stoch_k_{stoch_k_window}_{STOCH_K_SMOOTH}'] < 30)
+        long_entries = regras_tecnicas_long & regime_filter & risk_safe
+
+        long_exits = (close >= df[f'BB_Upper_{200}_{bb_exit_std}'])
+        if use_risk_filters: long_exits |= ~risk_safe
+
+        # Lógica Short
         short_entries, short_exits = pd.Series(False, index=df.index), pd.Series(False, index=df.index)
         if enable_short:
-            regras_tecnicas_short = (close < wwma_200) & ((close >= bb_lower_entry) & (close <= bb_middle)) & (obtr < obtr_mid) & inclinacao_negativa
-            if use_stoch_filter:
-                regras_tecnicas_short &= (stoch_k > 70)
-            short_entries = regras_tecnicas_short & regime_filter
-            bb_lower_exit = rolling_mean - (2.0 * rolling_std) # Fixo em 2.0 std para saída Short
-            short_exits = close <= bb_lower_exit
+            regras_tecnicas_short = (close < df['WWMA_200']) & (df['obtr'] < df['obtr_bb_middle_band'])
+            if use_stoch_filter: regras_tecnicas_short &= (df[f'stoch_k_{stoch_k_window}_{STOCH_K_SMOOTH}'] > 70)
+            short_entries = regras_tecnicas_short & regime_filter & risk_safe
+            
+            short_exits = (close <= df[f'BB_Lower_{200}_2.0'])
+            if use_risk_filters: short_exits |= ~risk_safe
 
-        # Limpeza final
-        long_entries, long_exits = long_entries.fillna(False), long_exits.fillna(False)
-        short_entries, short_exits = short_entries.fillna(False), short_exits.fillna(False)
-
-        if long_entries.sum() == 0 and short_entries.sum() == 0:
-            st.warning("Nenhum sinal de entrada foi gerado com os parâmetros atuais.")
-            st.stop()
+        if not long_entries.any() and not short_entries.any(): st.warning("Nenhum sinal de entrada foi gerado.")
         
-        # 4. Execução do Backtest
-        pf = vbt.Portfolio.from_signals(
-            close=close, entries=long_entries, exits=long_exits,
-            short_entries=short_entries, short_exits=short_exits,
-            sl_stop=sl_stop, init_cash=10000, fees=0.0006, slippage=0.001, freq='1D'
-        )
-
-        # 5. Visualização e Relatório
+        pf = vbt.Portfolio.from_signals(close, long_entries.fillna(False), long_exits.fillna(False), short_entries.fillna(False), short_exits.fillna(False),
+                                        sl_stop=sl_stop, init_cash=100000, fees=0.0006, slippage=0.001, freq='1D')
+        
         stats = pf.stats()
+        st.header("Métricas de Desempenho (Dupla Blindagem)")
+        c1, c2, c3, c4, c5 = st.columns([1,1,1,1,2])
+        c1.metric("Retorno Total", f"{stats.get('Total Return [%]', 0):.1f}%")
+        c2.metric("Win Rate", f"{stats.get('Win Rate [%]', 0):.1f}%")
+        c3.metric("Sharpe Ratio", f"{stats.get('Sharpe Ratio', 0):.2f}")
+        c4.metric("Max Drawdown", f"{stats.get('Max Drawdown [%]', 0):.1f}%")
+
+        params = pd.DataFrame([{"Ativo": ticker, "VolVol Limit": volvol_limit, "RawVol Limit": vol_raw_limit, "Filtros Risco": use_risk_filters}]).T.reset_index()
+        trades = pf.trades.records_readable if pf.trades.count() > 0 else pd.DataFrame()
+        with c5: st.download_button("📥 Baixar Relatório (.xlsx)", to_excel(params, stats, trades), f"backtest_{ticker}.xlsx")
+
+        # --- GRÁFICOS ---
+        st.subheader("Análise Gráfica: Preço, Sinais e Risco")
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
+
+        fig.add_trace(go.Scatter(x=df.index, y=close, name='Preço', line=dict(color='white')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index[long_entries], y=close[long_entries], mode='markers', name='Compra', marker=dict(color='cyan', symbol='triangle-up', size=12)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index[short_entries], y=close[short_entries], mode='markers', name='Venda', marker=dict(color='magenta', symbol='triangle-down', size=12)), row=1, col=1)
+
+        fig.add_trace(go.Scatter(x=df.index, y=vol_vol, name='Vol-of-Vol', line=dict(color='orange')), row=2, col=1)
+        fig.add_hline(y=volvol_limit, line_dash="dash", line_color="orange", row=2, col=1, annotation_text="Limite VolVol")
         
-        st.header("Métricas de Desempenho")
+        fig.add_trace(go.Scatter(x=df.index, y=vol_raw, name='Vol Pura', line=dict(color='yellow')), row=2, col=1)
+        fig.add_hline(y=vol_raw_limit, line_dash="dash", line_color="yellow", row=2, col=1, annotation_text="Limite Vol Pura")
         
-        # --- Geração do Relatório para Download ---
-        parametros_simulacao = pd.DataFrame([{
-            "Ativo": ticker, "Data Simulação": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Short Habilitado": enable_short, "Filtro Estocástico": use_stoch_filter,
-            "TP Long (STD)": bb_exit_std, "Stop Loss (%)": sl_stop * 100,
-            "Filtro Hurst Ativo": use_hurst_filter,
-            "Filtro Entropia Ativo": use_entropy_filter,
-            "Filtro Half-Life Ativo": use_halflife_filter, "Janela Hurst": hurst_window,
-            "Corte Hurst": hurst_threshold, "Janela Entropia": entropy_window,
-            "Corte Entropia": entropy_threshold, "Janela Half-Life": halflife_window,
-            "Corte Half-Life": halflife_threshold
-        }]).T.reset_index()
-        parametros_simulacao.columns = ["Parâmetro", "Valor"]
-        
-        trades_df = pf.trades.records_readable if not pf.trades.records.empty else pd.DataFrame()
-        excel_data = to_excel(parametros_simulacao, stats, trades_df)
+        if use_risk_filters:
+            unsafe_periods = df.index[~risk_safe]
+            for period_start in unsafe_periods:
+                fig.add_vrect(x0=period_start, x1=period_start + pd.Timedelta(days=1), fillcolor="rgba(255,0,0,0.2)", layer="below", line_width=0, row=1, col=1)
 
-        # --- Exibição das Métricas e Botão de Download ---
-        col1, col2, col3, col4, col5 = st.columns([1,1,1,1,2])
-        col1.metric("Retorno Total", f"{stats.get('Total Return [%]', 0):.1f}%")
-        col2.metric("Win Rate", f"{stats.get('Win Rate [%]', 0):.1f}%")
-        col3.metric("Sharpe Ratio", f"{stats.get('Sharpe Ratio', 0):.2f}")
-        col4.metric("Max Drawdown", f"{stats.get('Max Drawdown [%]', 0):.1f}%")
-        with col5:
-            st.write("") # Espaçador
-            st.download_button(
-                label=" Baixar Relatório em Excel",
-                data=excel_data,
-                file_name=f"relatorio_backtest_{ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        fig.update_layout(height=800, title_text=f"Análise de Risco Duplo ({ticker})", legend_title="Legenda", template="plotly_dark")
+        fig.update_yaxes(title_text="Preço", row=1, col=1)
+        fig.update_yaxes(title_text="Métricas de Risco", row=2, col=1)
+        st.plotly_chart(fig, use_container_width=True)
 
-        st.subheader("Gráfico de Operações")
-        
-        fig = pf.plot(settings=dict(width=None, height=600))
-        
-        # Adicionar as Bandas de Bollinger de Entrada ao gráfico
-        fig.add_trace(go.Scatter(x=df.index, y=bb_upper_entry, mode='lines', 
-                                 name=f'BB Upper ({bb_entry_std})', 
-                                 line=dict(color='rgba(255, 165, 0, 0.5)', width=1, dash='dot')))
-        fig.add_trace(go.Scatter(x=df.index, y=bb_middle, mode='lines', 
-                                 name='BB Middle', 
-                                 line=dict(color='rgba(0, 0, 255, 0.5)', width=1, dash='dot')))
-        fig.add_trace(go.Scatter(x=df.index, y=bb_lower_entry, mode='lines', 
-                                 name=f'BB Lower ({bb_entry_std})', 
-                                 line=dict(color='rgba(255, 165, 0, 0.5)', width=1, dash='dot')))
-
-        st.plotly_chart(fig, width='stretch')
-
-        st.subheader("Curva de Capital (Equity)")
-        equity = pf.value()
-        benchmark = (close / close.iloc[0]) * 10000
-        fig2 = go.Figure()
-        fig2.add_trace(go.Scatter(x=equity.index, y=equity, mode='lines', name="Estratégia", line=dict(color='green')))
-        fig2.add_trace(go.Scatter(x=benchmark.index, y=benchmark, mode='lines', name="Buy & Hold", line=dict(color='gray', dash='dot')))
-        fig2.update_layout(title="Estratégia vs. Buy & Hold", yaxis_title="Valor do Portfólio ($)")
-        st.plotly_chart(fig2, width='stretch')
-
-        st.subheader("Histórico de Trades")
-        if not trades_df.empty:
-            st.dataframe(trades_df.sort_values(by='Entry Timestamp', ascending=False), width='stretch')
-        else:
-            st.info("Nenhum trade foi executado.")
-
+        if not trades.empty:
+            st.subheader("Histórico de Trades")
+            st.dataframe(trades.sort_values(by='Entry Timestamp', ascending=False), use_container_width=True)
 else:
-    st.info("👈 Configure os parâmetros na barra lateral e clique em 'RODAR SIMULAÇÃO' para começar.")
+    st.info("👈 Configure os parâmetros e clique em 'RODAR SIMULAÇÃO'.")

@@ -212,6 +212,42 @@ def calculate_indicators(
         'Motivo_Bloqueio': motivo
     }
 
+def generate_signals_for_backtest(df: pd.DataFrame, min_data_points: int = 200) -> tuple[pd.Series, pd.Series]:
+    """
+    Roda a função 'check_rules' para cada dia no histórico do DataFrame.
+    Isso garante que o backtest use EXATAMENTE a mesma lógica do scanner.
+    
+    Args:
+        df: O DataFrame completo com todos os indicadores já calculados.
+        min_data_points: O número mínimo de pontos de dados necessários antes de começar a gerar sinais.
+
+    Returns:
+        Uma tupla contendo duas Series booleanas: (entries, short_entries).
+    """
+    if len(df) < min_data_points:
+        empty_series = pd.Series([False] * len(df), index=df.index)
+        return empty_series, empty_series
+
+    buy_signals = []
+    sell_signals = []
+    
+    # Itera sobre o dataframe, começando do ponto onde temos dados suficientes
+    for i in range(min_data_points, len(df)):
+        # Passa o slice do dataframe até o ponto atual para a função de checagem
+        historical_slice = df.iloc[0:i+1]
+        rules_result = check_rules(historical_slice)
+        
+        buy_signals.append(rules_result.get('Sinal_Compra', False))
+        sell_signals.append(rules_result.get('Sinal_Venda', False))
+        
+    # Preenche o início da série (onde não havia dados suficientes) com False
+    padding = [False] * min_data_points
+    
+    entries = pd.Series(padding + buy_signals, index=df.index, name='entries')
+    short_entries = pd.Series(padding + sell_signals, index=df.index, name='short_entries')
+    
+    return entries, short_entries
+
 def check_rules(df: pd.DataFrame) -> dict:
     """
     Verifica sinais de compra/venda com uma camada de "Veto por Risco Sistêmico".
