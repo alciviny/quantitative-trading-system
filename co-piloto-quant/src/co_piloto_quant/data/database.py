@@ -36,10 +36,9 @@ def init_db():
             )
         """)
         conn.commit()
-
 def save_price_data(df: pd.DataFrame, ticker: str):
     """
-    Salva dados OHLCV no SQLite usando Upsert.
+    Salva dados OHLCV no SQLite usando uma abordagem vetorizada robusta.
     """
     if df.empty:
         return
@@ -49,47 +48,69 @@ def save_price_data(df: pd.DataFrame, ticker: str):
         try:
             df.index = pd.to_datetime(df.index)
         except Exception:
-            raise ValueError("O índice deve ser DatetimeIndex.")
+            raise ValueError("O índice deve ser DatetimeIndex ou conversível para ele.")
 
-    # 2. Achata MultiIndex (comum no yfinance novo)
+    # 2. Achata MultiIndex (comum em algumas fontes de dados)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    
+
     # 3. Remove colunas duplicadas
     df = df.loc[:, ~df.columns.duplicated()]
 
-    # 4. Seleciona e ordena colunas existentes
-    # Nota: Usamos Capitalize (Open, High) porque é o padrão do yfinance
-    cols_map = {'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}
+    # 4. Padroniza colunas (Case insensitive)
+    # Cria um mapa reverso para encontrar 'Open', 'open', 'OPEN', etc.
+    curr_cols = {c.lower(): c for c in df.columns}
     
-    # Prepara lista de tuplas para inserção rápida
-    records = []
+    required_map = {
+        'open': 'open', 'high': 'high', 'low': 'low', 'close': 'close', 'volume': 'volume'
+    }
     
-    # Itera de forma eficiente
-    for idx, row in df.iterrows():
-        # Captura valores com segurança (get) e fallback para 0.0
-        r_open = float(row.get('Open', 0.0))
-        r_high = float(row.get('High', 0.0))
-        r_low = float(row.get('Low', 0.0))
-        r_close = float(row.get('Close', 0.0))
-        r_vol = float(row.get('Volume', 0.0))
-        
-        date_str = idx.strftime('%Y-%m-%d %H:%M:%S')
-        
-        records.append((ticker, date_str, r_open, r_high, r_low, r_close, r_vol))
+    df_clean = pd.DataFrame(index=df.index)
+    
+    # Preenche as colunas necessárias, usando 0.0 se não existirem
+    for req_lower, req_final in required_map.items():
+        if req_lower in curr_cols:
+            df_clean[req_final] = df[curr_cols[req_lower]].copy()
+        else:
+            df_clean[req_final] = 0.0
 
-    # 5. Executa Upsert em Lote
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.executemany("""
-            INSERT OR REPLACE INTO ohlcv (ticker, date, open, high, low, close, volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, records)
-        
-        cursor.execute("INSERT OR REPLACE INTO assets (ticker, last_update) VALUES (?, CURRENT_TIMESTAMP)", (ticker,))
-        conn.commit()
-        # print(f"Salvo: {len(records)} registros para {ticker}.")
+    # 5. Prepara dados para inserção (CORREÇÃO AQUI)
+    # Preenche NaN com 0.0
+    df_clean = df_clean.fillna(0.0)
 
+    # Extrai datas diretamente do índice (independente do nome ser 'Date', 'index' ou None)
+    dates = df_clean.index.strftime('%Y-%m-%d %H:%M:%S').tolist()
+    
+    # Cria lista de tickers
+    tickers = [ticker] * len(dates)
+    
+    # Cria a lista de tuplas para o executemany
+    records = list(zip(
+        tickers,
+        dates,
+        df_clean['open'].tolist(),
+        df_clean['high'].tolist(),
+        df_clean['low'].tolist(),
+        df_clean['close'].tolist(),
+        df_clean['volume'].tolist()
+    ))
+
+    if not records:
+        return
+
+    # 6. Executa Upsert em Lote
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.executemany("""
+                INSERT OR REPLACE INTO ohlcv (ticker, date, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, records)
+
+            cursor.execute("INSERT OR REPLACE INTO assets (ticker, last_update) VALUES (?, CURRENT_TIMESTAMP)", (ticker,))
+            conn.commit()
+    except Exception as e:
+        print(f"ERRO CRÍTICO ao salvar {ticker} no banco: {e}")
 def load_price_data(ticker: str) -> pd.DataFrame:
     """Lê dados do banco e retorna com Index Datetime e colunas minúsculas."""
     with sqlite3.connect(DB_PATH) as conn:

@@ -4,20 +4,44 @@ import time
 import sys
 import os
 from datetime import datetime
+from pathlib import Path
 
-# --- AJUSTE DE PATH ---
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# --- AJUSTE DE PATH E IMPORTS ---
+# Adiciona o diretório src ao path para importar os módulos corretamente
+current_dir = Path(__file__).resolve().parent
+project_root = current_dir.parent / "src"
+sys.path.append(str(project_root))
 
-# Importa a inteligência do sistema
-from src.co_piloto_quant.analysis import calculate_indicators, check_rules
-# Importa o Validador de Regime para a Saída de Emergência
-from src.co_piloto_quant.risk_regime import validate_market_regime
+# Importa as Configurações Centralizadas (O Mapa)
+from co_piloto_quant.config import (
+    MT5_MAGIC_NUMBER, MT5_DEVIATION, MT5_MAX_POSITIONS, 
+    TRADING_WHITELIST, FIXED_LOT_SIZE
+)
 
-# --- CONFIGURAÇÕES ---
-TIMEFRAME = mt5.TIMEFRAME_M15  # Gráfico de 15 minutos
-MAGIC_NUMBER = 777
-DEVIATION = 20
-MAX_ATIVOS = 10  # Limite para não travar
+# Importa a Inteligência (O Cérebro)
+from co_piloto_quant.analysis import calculate_indicators
+from co_piloto_quant.strategies.base import AdaptiveSniperStrategy
+from co_piloto_quant.risk_regime import validate_market_regime
+
+# --- MAPA DE TIMEFRAMES ---
+# TODO: Mover a string do timeframe para o arquivo de configuração (config.py)
+MT5_TIMEFRAME_STR = "M15" # Exemplo: "M1", "H1", "D1"
+
+# Mapeia a string do config para a constante do MT5
+TIMEFRAME_MAP = {
+    "M1": mt5.TIMEFRAME_M1,
+    "M5": mt5.TIMEFRAME_M5,
+    "M15": mt5.TIMEFRAME_M15,
+    "M30": mt5.TIMEFRAME_M30,
+    "H1": mt5.TIMEFRAME_H1,
+    "H4": mt5.TIMEFRAME_H4,
+    "D1": mt5.TIMEFRAME_D1
+}
+# Define o timeframe usado pegando da variável (ou padrão M15)
+CURRENT_TIMEFRAME = TIMEFRAME_MAP.get(MT5_TIMEFRAME_STR, mt5.TIMEFRAME_M15) 
+
+# Instancia a Estratégia UMA VEZ (Singleton)
+strategy_engine = AdaptiveSniperStrategy()
 
 def conectar_mt5():
     if not mt5.initialize():
@@ -26,24 +50,29 @@ def conectar_mt5():
     print(f"✅ Conectado ao MT5. Conta: {mt5.account_info().login}")
     return True
 
-def obter_ativos_visiveis():
-    """Retorna ativos da Observação de Mercado com filtro e limite."""
+def obter_ativos_monitorados():
+    """Retorna a lista de ativos com base no config ou Market Watch."""
+    # Se houver whitelist no config, usa ela
+    if TRADING_WHITELIST:
+        print(f"📋 Usando Whitelist do Config: {TRADING_WHITELIST}")
+        # Garante que estão visíveis no MT5
+        for sym in TRADING_WHITELIST:
+            mt5.symbol_select(sym, True)
+        return TRADING_WHITELIST
+
+    # Caso contrário, pega os visíveis do MT5
     symbols = mt5.symbols_get(visible=True)
     if not symbols:
         print("⚠️ Nenhum ativo visível na 'Observação de Mercado'!")
         return []
     
-    todos_nomes = [s.name for s in symbols]
+    ativos = [s.name for s in symbols]
+    # Filtro básico para não pegar lixo (opcional)
+    ativos_filtrados = [a for a in ativos if not a.endswith(('stat', 'k', 'c'))] # Exemplo de filtro
     
-    # Filtra apenas ativos principais para evitar lixo
-    ativos_filtrados = [
-        nome for nome in todos_nomes 
-        if any(x in nome for x in ['USD', 'EUR', 'BRL', 'BTC', 'XAU', 'WIN', 'WDO'])
-    ]
-    
-    ativos_finais = ativos_filtrados[:MAX_ATIVOS]
-    print(f"📋 Monitorando {len(ativos_finais)} ativos: {ativos_finais}")
-    return ativos_finais
+    # Limita quantidade para não sobrecarregar
+    limit = 10 
+    return ativos_filtrados[:limit]
 
 def buscar_dados_mt5(symbol, timeframe, n_barras=300):
     rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, n_barras)
@@ -54,212 +83,172 @@ def buscar_dados_mt5(symbol, timeframe, n_barras=300):
     df['time'] = pd.to_datetime(df['time'], unit='s')
     df.rename(columns={'tick_volume': 'volume'}, inplace=True)
     df.set_index('time', inplace=True)
+    
+    # Limpeza básica e renomeação de colunas para padrão do sistema
+    df = df[['open', 'high', 'low', 'close', 'volume']]
     return df
 
-def calcular_lote_minimo(symbol):
-    info = mt5.symbol_info(symbol)
-    if not info: return 0.01
-    return info.volume_min
-
-def checar_posicao_aberta(symbol):
-    """Retorna True se existe posição aberta para o ativo."""
-    positions = mt5.positions_get(symbol=symbol)
-    if positions and len(positions) > 0:
-        return True
-    return False
-
 def obter_filling_mode(symbol):
-    """
-    Descobre qual modo de preenchimento a corretora aceita para este ativo.
-    Evita o erro 10030 (Unsupported filling mode).
-    """
+    """Detecta o modo de preenchimento da ordem automaticamente."""
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
-        return mt5.ORDER_FILLING_FOK  # Fallback padrão
-        
-    filling = symbol_info.filling_mode
-
-    # Tenta encontrar o melhor modo disponível na ordem de prioridade
-    if filling & mt5.ORDER_FILLING_IOC:
-        return mt5.ORDER_FILLING_IOC
-    elif filling & mt5.ORDER_FILLING_FOK:
         return mt5.ORDER_FILLING_FOK
-    elif filling & mt5.ORDER_FILLING_RETURN:
-        return mt5.ORDER_FILLING_RETURN
     
-    return mt5.ORDER_FILLING_IOC # Se nada for detectado, tenta IOC
+    filling = symbol_info.filling_mode
+    if filling & mt5.ORDER_FILLING_IOC: return mt5.ORDER_FILLING_IOC
+    if filling & mt5.ORDER_FILLING_FOK: return mt5.ORDER_FILLING_FOK
+    if filling & mt5.ORDER_FILLING_RETURN: return mt5.ORDER_FILLING_RETURN
+    return mt5.ORDER_FILLING_IOC
 
-def fechar_posicao_emergencia(symbol, motivo):
-    positions = mt5.positions_get(symbol=symbol)
-    if not positions: return
-
-    print(f"🚨 EMERGÊNCIA: Fechando {symbol} por {motivo}...")
+def executar_ordem(symbol, tipo_ordem, signal_data):
+    """Envia a ordem para o MT5."""
     
-    # Descobre o modo correto
-    filling_type = obter_filling_mode(symbol)
-
-    for pos in positions:
-        tipo_fechamento = mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
-        price = mt5.symbol_info_tick(symbol).bid if tipo_fechamento == mt5.ORDER_TYPE_SELL else mt5.symbol_info_tick(symbol).ask
-        
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": pos.volume,
-            "type": tipo_fechamento,
-            "position": pos.ticket,
-            "price": price,
-            "deviation": DEVIATION,
-            "magic": MAGIC_NUMBER,
-            "comment": "Exit: Toxic Regime",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": filling_type,
-        }
-        
-        result = mt5.order_send(request)
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            print(f"   ❌ Falha ao fechar {symbol}: {result.comment}")
-        else:
-            print(f"   ✅ Posição {pos.ticket} encerrada com sucesso.")
-
-def enviar_ordem(ticker, tipo, sinal):
-    info = mt5.symbol_info(ticker)
-    if not info:
+    # Verifica limite de posições
+    open_positions = mt5.positions_total()
+    if open_positions >= MT5_MAX_POSITIONS and tipo_ordem in [mt5.ORDER_TYPE_BUY, mt5.ORDER_TYPE_SELL]:
+        print(f"⛔ Limite de posições atingido ({open_positions}/{MT5_MAX_POSITIONS}). Ignorando {symbol}.")
         return
 
-    # --- CHECAGEM DE SESSÃO DE TRADING (EVITA ERROS DE MERCADO FECHADO) ---
-    is_buy = tipo == mt5.ORDER_TYPE_BUY
-    trade_mode = info.trade_mode
-
-    if trade_mode == mt5.SYMBOL_TRADE_MODE_DISABLED:
-        return
-        
-    if trade_mode == mt5.SYMBOL_TRADE_MODE_CLOSEONLY:
-        return
-
-    if is_buy and trade_mode == mt5.SYMBOL_TRADE_MODE_SHORTONLY:
-        return
-
-    if not is_buy and trade_mode == mt5.SYMBOL_TRADE_MODE_LONGONLY:
-        return
-        
-    tick = mt5.symbol_info_tick(ticker)
+    tick = mt5.symbol_info_tick(symbol)
     if not tick: return
+
+    # Preço de Entrada
+    price = tick.ask if tipo_ordem == mt5.ORDER_TYPE_BUY else tick.bid
     
-    lote = calcular_lote_minimo(ticker)
-    price = tick.ask if tipo == mt5.ORDER_TYPE_BUY else tick.bid
-    sl = sinal.get('Stop_Loss_Sugerido_Long') if tipo == mt5.ORDER_TYPE_BUY else sinal.get('Stop_Loss_Sugerido_Short')
+    # Stop Loss (Vindo da Estratégia)
+    sl = signal_data.get('STOP_LOSS', 0.0)
     
-    # Descobre o modo correto
-    filling_type = obter_filling_mode(ticker)
+    # Se o SL for NaN ou 0, aplica um SL de segurança básico (ex: 1% do preço)
+    if not sl or pd.isna(sl):
+        dist = price * 0.01
+        sl = price - dist if tipo_ordem == mt5.ORDER_TYPE_BUY else price + dist
+
+    # Lote (Pega do Config ou calcula)
+    volume = FIXED_LOT_SIZE 
+    
+    filling_type = obter_filling_mode(symbol)
     
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": ticker,
-        "volume": float(lote),
-        "type": tipo,
+        "symbol": symbol,
+        "volume": float(volume),
+        "type": tipo_ordem,
         "price": price,
-        "sl": float(sl) if sl else 0.0,
-        "deviation": DEVIATION,
-        "magic": MAGIC_NUMBER,
-        "comment": "SmartBot Entry",
+        "sl": float(sl),
+        "deviation": MT5_DEVIATION,
+        "magic": MT5_MAGIC_NUMBER,
+        "comment": f"Sniper {strategy_engine.get_name()}",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": filling_type,
     }
     
-    print(f"🚀 Enviando ordem {ticker} (Lote: {lote} | Mode: {filling_type})...")
-    ret = mt5.order_send(request)
+    print(f"🚀 ENVIANDO ORDEM: {symbol} | {volume} lotes | SL: {sl}")
+    result = mt5.order_send(request)
     
-    if ret.retcode != mt5.TRADE_RETCODE_DONE:
-        print(f"   ❌ Erro MT5: {ret.comment} ({ret.retcode})")
-        # Se der erro de Invalid Filling mesmo assim, tenta FOK na força bruta
-        if ret.retcode == 10030:
-            print("      ⚠️ Tentando forçar modo FOK...")
-            request["type_filling"] = mt5.ORDER_FILLING_FOK
-            ret_fok = mt5.order_send(request)
-            if ret_fok.retcode != mt5.TRADE_RETCODE_DONE:
-                print(f"         ❌ Erro FOK: {ret_fok.comment} ({ret_fok.retcode})")
-            else:
-                print(f"         ✅ Ordem FOK Executada! Ticket: {ret_fok.order}")
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        print(f"❌ Erro MT5: {result.comment} ({result.retcode})")
     else:
-        print(f"   ✅ Ordem Executada! Ticket: {ret.order}")
+        print(f"✅ Ordem Executada! Ticket: {result.order}")
 
-def gerenciar_ativo(ticker):
-    """
-    Função Mestra: 
-    1. Se tem posição -> Verifica se precisa sair (Regime Tóxico).
-    2. Se não tem -> Verifica se pode entrar (Sinal Técnico).
-    """
-    # 1. Busca Dados
-    df = buscar_dados_mt5(ticker, TIMEFRAME)
-    if df.empty or len(df) < 100: return
+def fechar_posicao_emergencia(position, motivo):
+    """Fecha uma posição específica se o regime de mercado deteriorar."""
+    tick = mt5.symbol_info_tick(position.symbol)
+    if not tick: return
 
-    # 2. Calcula Inteligência (Indicadores + Regime)
+    tipo_fechamento = mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+    price = tick.bid if tipo_fechamento == mt5.ORDER_TYPE_SELL else tick.ask
+    
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": position.symbol,
+        "volume": position.volume,
+        "type": tipo_fechamento,
+        "position": position.ticket,
+        "price": price,
+        "magic": MT5_MAGIC_NUMBER,
+        "comment": f"Exit: {motivo}",
+        "type_filling": obter_filling_mode(position.symbol)
+    }
+    
+    mt5.order_send(request)
+    print(f"🚨 Posição {position.ticket} ({position.symbol}) encerrada. Motivo: {motivo}")
+
+def processar_ativo(symbol):
+    """
+    Ciclo completo de inteligência para um ativo.
+    """
+    # 1. Download de Dados
+    df = buscar_dados_mt5(symbol, CURRENT_TIMEFRAME, n_barras=300)
+    if df.empty or len(df) < 200: return
+
+    # 2. Cálculo de Indicadores (Usa a mesma func do Scanner)
+    # Isso garante que os indicadores sejam matematicamente idênticos
     try:
-        df_calc = calculate_indicators(df)
-        
-        # --- CHECAGEM DE REGIME (O GUARDIÃO) ---
-        # Verifica se o mercado está seguro (Hurst, Entropia, VolVol)
-        # Passamos o DataFrame completo para ele calcular os Z-Scores históricos
-        regime = validate_market_regime(df_calc)
-        
+        df_indic = calculate_indicators(df)
     except Exception as e:
-        # Se der erro de cálculo, melhor não fazer nada
-        # print(f"Erro calc {ticker}: {e}")
+        print(f"⚠️  Erro ao calcular indicadores para {symbol}: {e}")
         return
 
-    # 3. TOMADA DE DECISÃO
-    tem_posicao = checar_posicao_aberta(ticker)
+    # 3. Aplicação da Estratégia (O CÉREBRO)
+    # Aqui usamos a classe strategy_engine importada
+    try:
+        df_analyzed = strategy_engine.evaluate(df_indic)
+        latest = df_analyzed.iloc[-1]
+    except Exception as e:
+        print(f"⚠️  Erro ao avaliar estratégia para {symbol}: {e}")
+        return
 
-    # --- CENÁRIO A: JÁ ESTAMOS POSICIONADOS ---
-    if tem_posicao:
-        # Se o regime foi reprovado (Tóxico), sai imediatamente!
-        if not regime['approved']:
-            fechar_posicao_emergencia(ticker, motivo=regime['reason'])
-        else:
-            # Se o regime está ok, deixa o trade rolar (Stop Loss/Take Profit da corretora cuidam)
-            # print(f"🛡️ {ticker}: Posição mantida. Regime seguro.")
-            pass
-
-    # --- CENÁRIO B: ESTAMOS LÍQUIDOS (PROCURANDO ENTRADA) ---
-    else:
-        # Só olhamos entrada se o regime estiver aprovado
-        if regime['approved']:
-            sinal = check_rules(df_calc)
-            
-            # Executa Entrada
-            if sinal['Sinal_Compra']:
-                enviar_ordem(ticker, mt5.ORDER_TYPE_BUY, sinal)
-            elif sinal['Sinal_Venda']:
-                enviar_ordem(ticker, mt5.ORDER_TYPE_SELL, sinal)
-            else:
-                # print(f"⚪ {ticker}: Neutro")
-                pass
-        else:
-            # Regime reprovado, ignora o ativo
-            # print(f"⛔ {ticker}: Bloqueado pelo Regime ({regime['reason']})")
-            pass
-
-def run_universal_bot():
-    if not conectar_mt5(): return
-
-    print("\n🌍 --- SMART BOT LIVE (COM SAÍDA DE EMERGÊNCIA) ---")
+    # 4. Decisão de Trading
+    # Verifica se já temos posição neste ativo
+    positions = mt5.positions_get(symbol=symbol)
+    has_position = len(positions) > 0 if positions else False
     
+    # --- SAÍDA DE EMERGÊNCIA (Risk Regime) ---
+    # Verifica a qualidade do regime (Hurst/Entropia)
+    # Se o strategy.evaluate rodou, já temos Hurst_Z e Entropy_Z no DataFrame
+    hurst_z = latest.get('Hurst_Z', 0)
+    entropy_z = latest.get('Entropy_Z', 0)
+    
+    is_regime_toxic = (entropy_z > 2.0) # Exemplo: Entropia muito alta = Caos
+    
+    if has_position and is_regime_toxic:
+        for pos in positions:
+            fechar_posicao_emergencia(pos, "Regime Tóxico Detectado")
+        return # Sai da função para não abrir nova ordem
+
+    # --- ENTRADA (Sinais Técnicos) ---
+    if not has_position and not is_regime_toxic:
+        signal = latest.get('SIGNAL', 'HOLD')
+        
+        if signal == 'BUY':
+            executar_ordem(symbol, mt5.ORDER_TYPE_BUY, latest)
+        elif signal == 'SELL':
+            executar_ordem(symbol, mt5.ORDER_TYPE_SELL, latest)
+
+def run_bot():
+    if not conectar_mt5(): return
+    
+    print("\n💀 --- ADAPTIVE SNIPER BOT INICIADO ---")
+    print(f"🔧 Configuração: Timeframe {MT5_TIMEFRAME_STR} | Magic {MT5_MAGIC_NUMBER}")
+    
+    ativos = obter_ativos_monitorados()
+    print(f"👁️  Monitorando {len(ativos)} ativos.")
+
     try:
         while True:
-            print(f"\n🔄 Scanner {datetime.now().strftime('%H:%M:%S')} ------------------------")
-            
-            ativos = obter_ativos_visiveis()
+            print(f".", end="", flush=True) # Heartbeat visual
             
             for ativo in ativos:
-                gerenciar_ativo(ativo)
+                try:
+                    processar_ativo(ativo)
+                except Exception as e:
+                    print(f"Erro em {ativo}: {e}")
             
-            print("💤 Aguardando 15 segundos...")
-            time.sleep(15)
+            time.sleep(10) # Aguarda 10s entre ciclos
 
     except KeyboardInterrupt:
-        print("\n🛑 Bot parado.")
+        print("\n🛑 Bot Parado pelo Usuário.")
         mt5.shutdown()
 
 if __name__ == "__main__":
-    run_universal_bot()
+    run_bot()

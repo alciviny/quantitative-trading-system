@@ -1,5 +1,8 @@
+# scripts/run_dashboard.py
+
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import sys
@@ -10,313 +13,241 @@ current_dir = Path(__file__).resolve().parent
 project_root = current_dir.parent / "src"
 sys.path.append(str(project_root))
 
-from co_piloto_quant.config import PROCESSED_DATA_PATH
-from co_piloto_quant.analysis import load_processed_data, check_rules
-
-# Importando indicadores (Reaproveitando sua lógica existente)
-from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
-from co_piloto_quant.indicators.system_tpm import calculate_system_tpm
-from co_piloto_quant.config import PROCESSED_DATA_PATH, STOCH_K_PERIOD, STOCH_K_SMOOTH, STOCH_D_SMOOTH
+from co_piloto_quant.config import PROCESSED_DATA_PATH, BB_PERIOD
 
 # --- Configuração da Página ---
-st.set_page_config(page_title="Co-Piloto Quant Pro", layout="wide", page_icon="📊")
+st.set_page_config(
+    page_title="Co-Piloto Quant | Pro Dashboard",
+    layout="wide",
+    page_icon="🦅"
+)
 
-# --- CSS Customizado para dar ar profissional ---
+# --- CSS Profissional (Ajustado) ---
 st.markdown("""
 <style>
-    .stMetric {
-        background-color: #1E1E1E;
-        padding: 10px;
-        border-radius: 5px;
-        border: 1px solid #333;
-    }
-    .big-font {
-        font-size: 20px !important;
-        font-weight: bold;
+    .stApp { background-color: #0E1117; }
+    .stMetric { background-color: #262730; border-radius: 8px; padding: 10px; border: 1px solid #444; }
+    /* Caixas de Texto Personalizadas */
+    .personality-box {
+        padding: 15px;
+        border-radius: 10px;
+        background-color: rgba(255, 255, 255, 0.05);
+        border-left: 4px solid #3498db;
+        margin-bottom: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Barra Lateral (Controles) ---
-st.sidebar.title("🎛️ Painel de Controle")
+def load_data(ticker):
+    file_path = PROCESSED_DATA_PATH / f"{ticker}_processed.csv"
+    if not file_path.exists(): return None
+    df = pd.read_csv(file_path, index_col=0, parse_dates=True)
+    return df
 
-# 1. Seletor de Ativo
-try:
-    files = list(PROCESSED_DATA_PATH.glob("*_processed.csv"))
-    tickers = [f.name.replace("_processed.csv", "") for f in files]
-    if not tickers:
-        st.error("Nenhum dado encontrado. Rode o pipeline primeiro.")
-        st.stop()
-    selected_ticker = st.sidebar.selectbox("Escolha o Ativo:", tickers)
-except Exception as e:
-    st.error(f"Erro ao ler arquivos: {e}")
-    st.stop()
-
-# 2. Configurações Dinâmicas
-st.sidebar.markdown("---")
-st.sidebar.subheader("⚙️ Ajuste Fino")
-periodo_bb = st.sidebar.slider("Período Bollinger/Médias", 20, 300, 200)
-desvio_bb = st.sidebar.number_input("Desvio Padrão", 1.0, 3.0, 2.0, 0.1)
-ver_bandas_sistema = st.sidebar.checkbox("Ver Bandas de Fluxo (TPM)", value=True)
-
-# --- Na Barra Lateral, adicione este controle novo ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔬 Laboratório Quant")
-modo_analise_profunda = st.sidebar.checkbox("Ativar Indicadores Espectrais (Half-Life/Hilbert)", value=False)
-
-# --- Corpo Principal ---
-st.title(f"📊 Análise Quantitativa: {selected_ticker}")
-
-df = load_processed_data(selected_ticker)
-
-if df.empty:
-    st.error("Arquivo vazio.")
-else:
-    # Recalcula indicadores visuais baseados nos sliders (Interatividade!)
-    df_visual = df.copy()
+def calculate_financial_performance(df):
+    """
+    Simula o resultado financeiro de seguir os sinais.
+    Retorna: Lucro Total (%) e Fator de Lucro.
+    """
+    if 'SIGNAL' not in df.columns: return 0.0, 0.0, 0
     
-    # Validação de Regras (Usando o último candle)
-    last_row = df.iloc[-1]
-    regras = check_rules(last_row)
-
-    # --- Painel de Status (Topo) ---
-    # AGORA COM 5 COLUNAS PARA INCLUIR O HURST
-    col1, col2, col3, col4, col5 = st.columns(5)
+    # Filtra onde houve sinal (ignorando HOLD)
+    trades = df[df['SIGNAL'].isin(['BUY', 'SELL'])].copy()
     
-    with col1:
-        st.metric("Preço Atual", f"R$ {last_row['close']:.2f}")
+    if trades.empty: return 0.0, 0.0, 0
     
-    with col2:
-        status_compra = "SIM" if regras.get('Sinal_Compra') else "NÃO"
-        st.metric("Sinal de COMPRA", status_compra, delta="Potencial Alta" if regras.get('Sinal_Compra') else None)
+    balance = 100.0 # Começa com base 100%
+    wins = 0
+    losses = 0
+    total_trades = 0
+    
+    # Simulação Simplificada: Segura por 5 dias ou até sinal oposto (simplificado para 5 dias fixos aqui)
+    holding_period = 5 
+    
+    for date, row in trades.iterrows():
+        try:
+            # Pega o preço N dias depois
+            idx_loc = df.index.get_loc(date)
+            if idx_loc + holding_period >= len(df): continue
+            
+            entry = row['close']
+            exit_price = df.iloc[idx_loc + holding_period]['close']
+            
+            if row['SIGNAL'] == 'BUY':
+                r = (exit_price - entry) / entry
+            else: # SELL
+                r = (entry - exit_price) / entry
+                
+            balance *= (1 + r)
+            
+            if r > 0: wins += 1
+            else: losses += 1
+            total_trades += 1
+        except:
+            continue
+            
+    total_return_pct = (balance - 100.0)
+    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+    
+    return total_return_pct, win_rate, total_trades
 
-    with col3:
-        status_venda = "SIM" if regras.get('Sinal_Venda') else "NÃO"
-        st.metric("Sinal de VENDA", status_venda, delta_color="inverse", delta="-Potencial Baixa" if regras.get('Sinal_Venda') else None)
-
-    with col4:
-        squeeze = "ALERTA" if regras.get('Potencial_Squeeze') else "Normal"
-        st.metric("Volatilidade", squeeze, delta="Explosão Iminente" if regras.get('Potencial_Squeeze') else None, delta_color="off")
-
-    # --- NOVO CARD PARA O HURST ---
-    with col5:
-        # Pega o valor do Hurst diretamente do dicionário de regras para consistência
-        hurst_val = regras.get('Hurst_Score', 0.5)
+def get_asset_personality(df):
+    """
+    Calcula as estatísticas descritivas (DNA) do ativo.
+    """
+    stats = {}
+    
+    # 1. Personalidade do Hurst (Tendência)
+    if 'Hurst_72_returns' in df.columns: # Usando o valor bruto, não o Z
+        h = df['Hurst_72_returns'].dropna()
+        stats['hurst_mean'] = h.mean()
+        stats['hurst_current'] = h.iloc[-1]
+        # Percentil: Onde o valor atual se encaixa na história?
+        stats['hurst_percentile'] = h.rank(pct=True).iloc[-1] * 100 
         
-        # Define o texto do regime
-        if hurst_val > 0.6:
-            regime = "TENDÊNCIA"
-            delta_color = "normal" # Verde
-        elif hurst_val < 0.4:
-            regime = "LATERAL"
-            delta_color = "inverse" # Vermelho
+    # 2. Personalidade da Volatilidade (Normalizada)
+    if 'Hurst_Z' in df.columns: # Usando Z como proxy de desvio
+        z = df['Hurst_Z'].dropna()
+        stats['z_mean'] = z.mean() # Deve ser perto de 0
+        stats['z_current'] = z.iloc[-1]
+        stats['z_max'] = z.max()
+        stats['z_min'] = z.min()
+        
+    return stats
+
+# --- SIDEBAR: OPERACIONAL ---
+st.sidebar.title("🎛️ Centro de Controle")
+
+files = list(PROCESSED_DATA_PATH.glob("*_processed.csv"))
+tickers = [f.name.replace("_processed.csv", "") for f in files]
+if not tickers: st.stop()
+
+selected_ticker = st.sidebar.selectbox("Ativo", tickers)
+df = load_data(selected_ticker)
+latest = df.iloc[-1]
+signal = latest.get('SIGNAL', 'HOLD')
+
+# --- Calculadora de Risco (Mantida) ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("💰 Calculadora de Lote")
+capital = st.sidebar.number_input("Capital (R$)", 10000.0, 1000000.0, 100000.0)
+risk_pct = st.sidebar.slider("Risco (%)", 0.5, 5.0, 1.0)
+entry_price = latest['close']
+stop_loss = latest.get('STOP_LOSS', 0)
+
+# Lógica de Stop Padrão se não houver sinal
+if pd.isna(stop_loss) or stop_loss == 0:
+    stop_dist_pct = 0.03 
+    if signal == 'BUY': stop_loss = entry_price * (1 - stop_dist_pct)
+    else: stop_loss = entry_price * (1 + stop_dist_pct)
+
+risk_money = capital * (risk_pct / 100)
+dist_price = abs(entry_price - stop_loss)
+qty = int(risk_money / dist_price) if dist_price > 0 else 0
+st.sidebar.info(f"Stop: R$ {stop_loss:.2f}\n\nLote: **{qty} ações**")
+
+# --- CORPO PRINCIPAL ---
+st.title(f"🦅 Pro Analysis: {selected_ticker}")
+
+# 1. KPI DE RESULTADO (A resposta para 'Eu tive lucro?')
+ret_total, win_rate, n_trades = calculate_financial_performance(df)
+
+kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+kpi1.metric("Preço", f"R$ {latest['close']:.2f}")
+kpi2.metric("Sinal Vigente", signal, delta="AÇÃO NECESSÁRIA" if signal != 'HOLD' else None)
+# Mostra o lucro acumulado simulado
+kpi3.metric("Lucro Acumulado (Simulado)", f"{ret_total:+.2f}%", f"{n_trades} trades")
+kpi4.metric("Taxa de Acerto", f"{win_rate:.0f}%", "Consistência")
+
+# 2. DNA DO ATIVO (A resposta para 'Qual o normal dele?')
+stats = get_asset_personality(df)
+
+with st.expander("🧬 DNA e Personalidade do Ativo (Análise Profunda)", expanded=True):
+    col_dna1, col_dna2 = st.columns(2)
+    
+    with col_dna1:
+        st.markdown(f"### 🌊 Tendência (Hurst)")
+        h_curr = stats.get('hurst_current', 0.5)
+        h_mean = stats.get('hurst_mean', 0.5)
+        h_pct = stats.get('hurst_percentile', 50)
+        
+        st.write(f"**Valor Atual:** {h_curr:.2f}")
+        st.write(f"**Média Histórica:** {h_mean:.2f}")
+        
+        # Interpretação
+        if h_curr > h_mean + 0.05:
+            msg = "🔥 **Estado: Tendência Forte.** O ativo está muito mais direcional que o normal."
+        elif h_curr < h_mean - 0.05:
+            msg = "🦀 **Estado: Lateralidade Extrema.** O ativo está mais 'preso' que o habitual."
         else:
-            regime = "NEUTRO"
-            delta_color = "off" # Cinza
-            
-        st.metric("Regime (Hurst)", f"{hurst_val:.2f}", delta=regime, delta_color=delta_color)
+            msg = "⚖️ **Estado: Normal.** Comportamento padrão para este ativo."
+        st.info(msg)
+        st.progress(int(h_pct)) # Barra visual de 0 a 100%
+        st.caption(f"O Hurst atual é maior que {h_pct:.0f}% do histórico desse ativo.")
 
+    with col_dna2:
+        st.markdown(f"### ⚡ Anomalia (Z-Score)")
+        z_curr = stats.get('z_current', 0)
+        z_max = stats.get('z_max', 3)
+        z_min = stats.get('z_min', -3)
+        
+        st.write(f"**Z-Score Atual:** {z_curr:.2f}")
+        st.write(f"**Extremos Históricos:** {z_min:.2f} a {z_max:.2f}")
+        
+        if abs(z_curr) > 2.0:
+            st.warning("⚠️ **Evento Raro!** Estamos em um desvio estatístico de 2 sigmas. Reversão ou explosão iminente.")
+        else:
+            st.success("✅ **Comportamento Estatístico Aceitável.** Sem anomalias graves.")
 
-    # --- Visualização Gráfica (Plotly) ---
-    
-    # Definição dinâmica de linhas baseada no modo escolhido
-    if modo_analise_profunda:
-        total_rows = 8 # AUMENTADO PARA 8 LINHAS
-        # Alturas ajustadas para 8 gráficos, dando um pouco mais de espaço para os de física
-        row_heights = [0.35, 0.10, 0.10, 0.10, 0.10, 0.10, 0.075, 0.075] 
-        titles = (
-            "Ação do Preço & Estrutura", "Fluxo (OBTR/WAD)", "Oscilador (IFR)", 
-            "Estocástico (80,3,3)", "Regime (Hurst)", 
-            "Ciclos de Mercado (Hilbert Sine)", 
-            "Física: Half-Life (Barras)", # Título separado
-            "Física: Entropia (Linha)"     # Título separado
-        )
-        fig_height = 2000 # Altura aumentada
-    else:
-        total_rows = 5
-        row_heights = [0.40, 0.15, 0.15, 0.15, 0.15]
-        titles = (
-            "Ação do Preço & Estrutura", "Fluxo (OBTR/WAD)", "Oscilador (IFR)", 
-            "Estocástico (80,3,3)", "Regime (Hurst)"
-        )
-        fig_height = 1400
+# 3. GRÁFICOS CORRIGIDOS (Eixos Separados)
+fig = make_subplots(
+    rows=3, cols=1, 
+    shared_xaxes=True, 
+    vertical_spacing=0.08, # Mais espaço entre gráficos
+    row_heights=[0.6, 0.2, 0.2],
+    subplot_titles=("Preço e Sinais", "Ciclo de Tendência (Hurst)", "Oscilador de Entrada (Stoch)")
+)
 
-    fig = make_subplots(
-        rows=total_rows, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=row_heights,
-        subplot_titles=titles,
-        # REMOVIDO secondary_y, agora todos os eixos são primários
-        specs=[[{"secondary_y": False}]] * total_rows 
-    )
+# Grafico 1: Preço
+fig.add_trace(go.Candlestick(
+    x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name="OHLC"
+), row=1, col=1)
 
-    # --- PLOTS ORIGINAIS (LINHAS 1-5) ---
-
-    # 1. PREÇO (Row 1)
-    fig.add_trace(go.Candlestick(
-        x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name="OHLC"
-    ), row=1, col=1)
-
-    # Média Móvel
+# Sinais (Plotados com segurança no eixo Y do preço)
+buys = df[df['SIGNAL'] == 'BUY']
+if not buys.empty:
     fig.add_trace(go.Scatter(
-        x=df.index, y=df['close'].ewm(alpha=1/periodo_bb, adjust=False).mean(), 
-        line=dict(color='orange', width=2), name=f"Média Wilder {periodo_bb}"
+        x=buys.index, y=buys['low']*0.99, mode='markers', 
+        marker=dict(symbol='triangle-up', size=12, color='#00FF00'), name="COMPRA"
     ), row=1, col=1)
-    
-    # Banda de Squeeze (0.45)
-    if 'BB_Upper_200_0.45' in df.columns:
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df['BB_Upper_200_0.45'], 
-            line=dict(width=0), showlegend=False, hoverinfo='skip'
-        ), row=1, col=1)
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df['BB_Lower_200_0.45'], 
-            line=dict(width=0), 
-            fill='tonexty', fillcolor='rgba(0, 255, 0, 0.15)',
-            name="Zona Squeeze (0.45)"
-        ), row=1, col=1)
 
-    # Bandas de Bollinger (2.0)
-    if 'BB_Upper_200_2.0' in df.columns:
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df['BB_Upper_200_2.0'], 
-            line=dict(color='gray', width=1, dash='dot'), showlegend=False
-        ), row=1, col=1)
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df['BB_Lower_200_2.0'], 
-            line=dict(color='gray', width=1, dash='dot'), name="Bollinger (2.0)",
-            fill='tonexty', fillcolor='rgba(128,128,128,0.1)'
-        ), row=1, col=1)
+sells = df[df['SIGNAL'] == 'SELL']
+if not sells.empty:
+    fig.add_trace(go.Scatter(
+        x=sells.index, y=sells['high']*1.01, mode='markers', 
+        marker=dict(symbol='triangle-down', size=12, color='#FF0000'), name="VENDA"
+    ), row=1, col=1)
 
-    # 2. FLUXO (Row 2)
-    if 'obtr' in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df['obtr'], line=dict(color='#00FF00', width=1), name="OBTR (Fluxo)"), row=2, col=1)
-        if ver_bandas_sistema and 'obtr_bb_upper_band_0_45' in df.columns:
-             fig.add_trace(go.Scatter(x=df.index, y=df['obtr_bb_upper_band_0_45'], line=dict(width=0), showlegend=False), row=2, col=1)
-             fig.add_trace(go.Scatter(x=df.index, y=df['obtr_bb_lower_band_0_45'], line=dict(width=0), fill='tonexty', fillcolor='rgba(0, 255, 0, 0.1)', name="Zona OBTR"), row=2, col=1)
+# Bandas (Adicionar apenas linhas, sem preenchimento pesado para limpar visual)
+if f'BB_Upper_{BB_PERIOD}_0.45' in df.columns:
+    fig.add_trace(go.Scatter(x=df.index, y=df[f'BB_Upper_{BB_PERIOD}_0.45'], line=dict(width=0.5, color='gray'), showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df[f'BB_Lower_{BB_PERIOD}_0.45'], line=dict(width=0.5, color='gray'), showlegend=False), row=1, col=1)
 
-    if 'wad' in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df['wad'], line=dict(color='#FF00FF', width=1), name="Williams A/D"), row=2, col=1)
-        if ver_bandas_sistema and 'wad_bb_upper_band_0_45' in df.columns:
-             fig.add_trace(go.Scatter(x=df.index, y=df['wad_bb_upper_band_0_45'], line=dict(width=0), showlegend=False), row=2, col=1)
-             fig.add_trace(go.Scatter(x=df.index, y=df['wad_bb_lower_band_0_45'], line=dict(width=0), fill='tonexty', fillcolor='rgba(255, 0, 255, 0.1)', name="Zona WAD"), row=2, col=1)
+# Grafico 2: Hurst (Eixo Y independente garantido)
+if 'Hurst_Z' in df.columns:
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df['Hurst_Z'], line=dict(color='yellow', width=1.5), name="Hurst Z"
+    ), row=2, col=1)
+    fig.add_hline(y=0, line_color="white", line_dash="dot", row=2, col=1)
 
-    # 3. IFR (Row 3)
-    if 'IFR_120' in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df['IFR_120'], line=dict(color='cyan', width=1.5), name="IFR 120"), row=3, col=1)
-        fig.add_hline(y=50, line_dash="dash", line_color="white", opacity=0.3, row=3, col=1)
-        fig.add_hrect(y0=48, y1=52, fillcolor="white", opacity=0.1, layer="below", line_width=0, row=3, col=1)
+# Grafico 3: Estocástico
+stoch_col = [c for c in df.columns if 'stoch_k' in c]
+if stoch_col:
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df[stoch_col[0]], line=dict(color='cyan', width=1.5), name="Stoch"
+    ), row=3, col=1)
+    fig.add_hline(y=20, line_color="green", line_dash="dash", row=3, col=1)
+    fig.add_hline(y=80, line_color="red", line_dash="dash", row=3, col=1)
 
-    # 4. ESTOCÁSTICO (Row 4)
-    col_k = f'stoch_k_{STOCH_K_PERIOD}_{STOCH_K_SMOOTH}'
-    col_d = f'stoch_d_{STOCH_K_PERIOD}_{STOCH_K_SMOOTH}_{STOCH_D_SMOOTH}'
-
-    if col_k in df.columns:
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df[col_k], 
-            line=dict(color='#E377C2', width=1.5), name="Stoch %K"
-        ), row=4, col=1)
-        if col_d in df.columns:
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df[col_d], 
-                line=dict(color='white', width=1, dash='dot'), name="Stoch %D"
-            ), row=4, col=1)
-        
-        fig.add_hline(y=20, line_dash="dash", line_color="gray", opacity=0.5, row=4, col=1)
-        fig.add_hline(y=80, line_dash="dash", line_color="gray", opacity=0.5, row=4, col=1)
-
-    # 5. HURST EXPONENT (Row 5) - NOVO BLOCO
-    col_hurst = 'Hurst_72_returns' # Nome da coluna CORRIGIDO
-    
-    if col_hurst in df.columns:
-        # Plota a Linha do Hurst
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df[col_hurst],
-            line=dict(color='yellow', width=1.5), name="Hurst"
-        ), row=5, col=1)
-        
-        # Zonas de Regime (Background Colorido)
-        # Verde para Tendência (> 0.6)
-        fig.add_hrect(y0=0.6, y1=1.0, fillcolor="green", opacity=0.15, layer="below", line_width=0, row=5, col=1)
-        # Vermelho para Lateralidade/Reversão (< 0.4)
-        fig.add_hrect(y0=0.0, y1=0.4, fillcolor="red", opacity=0.15, layer="below", line_width=0, row=5, col=1)
-        # Linha Neutra
-        fig.add_hline(y=0.5, line_dash="dot", line_color="gray", opacity=0.5, row=5, col=1)
-        
-        # Ajusta range do eixo Y para focar na área útil
-        fig.update_yaxes(range=[0.2, 0.9], row=5, col=1)
-    
-    # -------------------------------------------------------------------------
-    # --- NOVAS VISUALIZAÇÕES (Fórmulas Invisíveis) ---
-    # -------------------------------------------------------------------------
-    
-    if modo_analise_profunda:
-        # 6. HILBERT SINE WAVE (Row 6) - O Gatilho de Precisão
-        if 'Hilbert_Sine' in df.columns and 'Hilbert_Lead' in df.columns:
-            # Onda Senoidal (Verde Neon)
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df['Hilbert_Sine'],
-                line=dict(color='#00FF00', width=1.5), name="Hilbert Sine"
-            ), row=6, col=1)
-            
-            # Onda Líder (Amarelo - Antecipa o movimento)
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df['Hilbert_Lead'],
-                line=dict(color='yellow', width=1, dash='solid'), name="Hilbert Lead"
-            ), row=6, col=1)
-
-            # Linhas de Gatilho (+0.7 e -0.7)
-            fig.add_hline(y=0.7, line_dash="dot", line_color="gray", row=6, col=1)
-            fig.add_hline(y=-0.7, line_dash="dot", line_color="gray", row=6, col=1)
-            
-            # Preenchimento visual de Fundo/Topo
-            fig.add_hrect(y0=-1, y1=-0.7, fillcolor="green", opacity=0.1, line_width=0, row=6, col=1) # Zona de Compra
-            fig.add_hrect(y0=0.7, y1=1, fillcolor="red", opacity=0.1, line_width=0, row=6, col=1)     # Zona de Venda
-
-        # 7. FÍSICA DE MERCADO: HALF-LIFE (Row 7) - AGORA SOZINHO
-        if 'HalfLife_60' in df.columns:
-            # Clip visual para não estragar o gráfico quando HL explode para 1000
-            hl_plot = df['HalfLife_60'].clip(upper=50) 
-            
-            fig.add_trace(go.Bar(
-                x=df.index, y=hl_plot,
-                marker_color='rgba(100, 200, 255, 0.3)',
-                name="Half-Life (Dias)",
-            ), row=7, col=1)
-
-            # Linha de corte para opções (Ex: 10 dias)
-            fig.add_hline(y=10, line_dash="dash", line_color="cyan", annotation_text="Zona Opções (&lt;10d)", row=7, col=1)
-
-        # 8. FÍSICA DE MERCADO: ENTROPIA (Row 8) - NOVO PAINEL
-        if 'Entropy_20' in df.columns:
-            fig.add_trace(go.Scatter(
-                x=df.index, y=df['Entropy_20'],
-                line=dict(color='orange', width=2),
-                name="Entropia (Caos)"
-            ), row=8, col=1) # MOVIDO PARA ROW 8
-            
-            # Zona de Caos (> 3.0 bits)
-            fig.add_hrect(y0=3.0, y1=4.0, fillcolor="red", opacity=0.1, line_width=0, row=8, col=1) # MOVIDO PARA ROW 8
-
-        # ATUALIZAÇÃO DOS EIXOS Y SEPARADAMENTE
-        fig.update_yaxes(title_text="Half-Life (Dias)", range=[0, 50], row=7, col=1)
-        fig.update_yaxes(title_text="Entropia (Bits)", range=[1, 4], row=8, col=1)
-
-    # Layout Final
-    fig.update_layout(
-        height=fig_height, # Aumentei a altura para caber o 5º gráfico
-        xaxis_rangeslider_visible=False,
-        template="plotly_white",
-        margin=dict(l=10, r=10, t=30, b=10),
-        legend=dict(orientation="h", y=1, x=0)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # --- Debug Area ---
-    with st.expander("🕵️ Detalhes das Regras (Debug)"):
-        st.write("Estado das variáveis no último candle:")
-        st.json(regras)
-        st.write("Dados Brutos (Últimos 5 dias):")
-        st.dataframe(df.tail(5))
+fig.update_layout(height=900, template="plotly_dark", margin=dict(t=30, b=10, l=10, r=10), showlegend=False)
+st.plotly_chart(fig, use_container_width=True)
