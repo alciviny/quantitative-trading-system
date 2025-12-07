@@ -12,6 +12,7 @@ from co_piloto_quant.data.database import load_price_data
 from co_piloto_quant.analysis import calculate_indicators
 from co_piloto_quant.utils import get_expanded_universe
 from co_piloto_quant.risk_regime import calculate_vol_of_vol # Instrução 1: Importar
+from co_piloto_quant.strategies.base import AdaptiveSniperStrategy
 
 # --- CONFIGURAÇÕES DO BACKTEST ---
 INITIAL_CAPITAL = 100000
@@ -59,49 +60,25 @@ def run_vectorized_backtest(ticker: str):
     # Máscara final: Ambas as condições devem ser verdadeiras
     risk_safe = vol_vol_cond & raw_vol_cond
     
-    # --- Lógica de ENTRADA (COMPRA) ---
-    filtro_tendencia = df.get('Hurst_72_returns', pd.Series(0.0, index=df.index)) >= 0.53
-    filtro_caos = df.get('Entropy_20', pd.Series(999.0, index=df.index)) <= ENTROPY_CHAOS_THRESHOLD
-    filtro_sustentacao = df.get('HalfLife_60', pd.Series(0.0, index=df.index)) >= 15
-    regime_filter = filtro_tendencia & filtro_caos & filtro_sustentacao
+    # --- Lógica de Trading (via Strategy Class) ---
+    # A estratégia centralizada define os sinais de BUY e SELL, garantindo que o backtest
+    # use o mesmo "cérebro" do robô de produção.
+    strategy = AdaptiveSniperStrategy(
+        bb_exit_std_dev=BB_EXIT_STD_DEV, 
+        entropy_chaos_threshold=ENTROPY_CHAOS_THRESHOLD
+    )
+    df = strategy.evaluate(df)
+
+    # Converte os sinais da estratégia em máscaras booleanas para o vectorbt
+    entries = (df['SIGNAL'] == 'BUY')
+    exits = (df['SIGNAL'] == 'SELL')
     
-    preco_na_zona_valor = (df['close'] >= df[f'BB_Lower_200_0.45']) & \
-                          (df['close'] <= df[f'BB_Upper_200_0.45'])
-    
-    inclincao_wwma_positiva = df['WWMA_200'].diff(5) > 0
+    # Aplica o filtro de risco externo do backtest sobre os sinais de entrada da estratégia
+    entries = entries & risk_safe
 
-    fluxo_alta = (df['obtr'] > df['obtr_bb_middle_band']) | (df['wad'] > df['wad_bb_middle_band'])
-    potencial_alta_tecnico = preco_na_zona_valor & inclincao_wwma_positiva & fluxo_alta
-    
-    stoch_k_col = 'stoch_k_80_3' 
-    condicao_stoch_compra = df[stoch_k_col] < 30
-    
-    # APLICAÇÃO DO FILTRO DE RISCO COMBINADO
-    entries = potencial_alta_tecnico & regime_filter & condicao_stoch_compra & risk_safe
-
-    # --- Lógica de SAÍDA (COMPRA) ---
-    bb_exit_col = f'BB_Upper_200_{BB_EXIT_STD_DEV}'
-    take_profit_long = df['close'] >= df[bb_exit_col]
-    stop_loss_long = df['close'] < df[f'BB_Lower_200_0.45']
-    # Instrução 3 (Opcional): SAÍDA DE EMERGÊNCIA POR RISCO
-    exits = take_profit_long | stop_loss_long | (~risk_safe)
-
-    # --- Lógica de ENTRADA (VENDA) ---
-    tendencia_baixa = df['close'] < df['WWMA_200']
-    preco_na_metade_inferior = (df['close'] >= df[f'BB_Lower_200_0.45']) & (df['close'] <= df[f'BB_Middle_200'])
-    fluxo_baixa = (df['obtr'] < df['obtr_bb_middle_band']) | (df['wad'] < df['wad_bb_middle_band'])
-    potencial_baixa_tecnico = tendencia_baixa & preco_na_metade_inferior & fluxo_baixa
-    condicao_stoch_venda = df[stoch_k_col] > 70
-
-    # Instrução 3: APLICAÇÃO DO FILTRO DE RISCO
-    short_entries = potencial_baixa_tecnico & regime_filter & condicao_stoch_venda & risk_safe
-
-    # --- Lógica de SAÍDA (VENDA) ---
-    bb_short_exit_col = f'BB_Lower_200_{BB_EXIT_STD_DEV}'
-    take_profit_short = df['close'] <= df[bb_short_exit_col]
-    stop_loss_short = df['close'] > df[f'BB_Upper_200_0.45']
-    # Instrução 3 (Opcional): SAÍDA DE EMERGÊNCIA POR RISCO
-    short_exits = take_profit_short | stop_loss_short | (~risk_safe)
+    # A AdaptiveSniperStrategy é long-only, então o short está desativado.
+    short_entries = pd.Series(False, index=df.index)
+    short_exits = pd.Series(False, index=df.index)
 
     # Evitar look-ahead bias
     entries = entries.shift(1).fillna(False)
