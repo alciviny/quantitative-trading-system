@@ -3,6 +3,7 @@ import numpy as np
 import pandera.pandas as pa
 from pandera.errors import SchemaError
 from co_piloto_quant.indicators.ww_moving_average import ww_moving_average
+from co_piloto_quant.indicators.names import IndicatorNames
 
 def bollinger_bands(data: pd.DataFrame, column: str = 'close', period: int = 200, std_devs: list = [2.0]) -> pd.DataFrame:
     """
@@ -41,13 +42,13 @@ def bollinger_bands(data: pd.DataFrame, column: str = 'close', period: int = 200
     rolling_std = np.sqrt(variance)
 
     
-    bands_df = pd.DataFrame({f'BB_Middle_{period}': middle_band})
+    bands_df = pd.DataFrame({IndicatorNames.bollinger_middle(period): middle_band})
 
     
     for std_dev_multiplier in std_devs:
         upper_band = middle_band + (rolling_std * std_dev_multiplier)
         lower_band = middle_band - (rolling_std * std_dev_multiplier)
-        bands_df[f'BB_Upper_{period}_{std_dev_multiplier}'] = upper_band
-        bands_df[f'BB_Lower_{period}_{std_dev_multiplier}'] = lower_band
+        bands_df[IndicatorNames.bollinger_upper(period, std_dev_multiplier)] = upper_band
+        bands_df[IndicatorNames.bollinger_lower(period, std_dev_multiplier)] = lower_band
         
     return bands_df
