@@ -14,7 +14,7 @@ sys.path.append(str(project_root))
 
 from co_piloto_quant.config import (
     MT5_MAGIC_NUMBER, MT5_DEVIATION, MT5_MAX_POSITIONS,
-    TRADING_WHITELIST, FIXED_LOT_SIZE
+    TRADING_WHITELIST, FIXED_LOT_SIZE, BB_ENTRY_STD_DEV_DEFAULT
 )
 from co_piloto_quant.analysis import calculate_indicators
 from co_piloto_quant.strategies.base import AdaptiveSniperStrategy
@@ -33,7 +33,19 @@ BREAKEVEN_PROFIT_MULTIPLIER = 1.5
 MT5_TIMEFRAME_STR = "M15"
 N_BARS_TO_FETCH = 300
 
-strategy_engine = AdaptiveSniperStrategy()
+def load_optimal_parameters(file_path: Path) -> pd.DataFrame:
+    """Carrega o ranking de estabilidade e o prepara para consulta rápida."""
+    if not file_path.exists():
+        send_message("Arquivo `professional_stability_ranking.csv` não encontrado. Usando parâmetros padrão.", type='WARNING')
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(file_path)
+        df.set_index('Ticker', inplace=True)
+        send_message(f"Ranking de estabilidade com {len(df)} ativos carregado com sucesso.", type='INFO')
+        return df
+    except Exception as e:
+        send_message(f"Falha ao ler o arquivo de ranking: {e}. Usando parâmetros padrão.", type='ERROR')
+        return pd.DataFrame()
 
 def is_trading_hours():
     now = datetime.now().time()
@@ -47,7 +59,7 @@ def obter_ativos_monitorados():
     symbols = mt5.symbols_get(group="!*.ECN")
     return [s.name for s in symbols] if symbols else []
 
-def executar_ordem(provider: MT5DataProvider, logger: TradeLogger, symbol: str, tipo_ordem: int, signal_data: pd.Series):
+def executar_ordem(provider: MT5DataProvider, logger: TradeLogger, symbol: str, tipo_ordem: int, signal_data: pd.Series, strategy_engine: AdaptiveSniperStrategy):
     if (mt5.positions_total() + mt5.orders_total()) >= MT5_MAX_POSITIONS:
         return
 
@@ -91,6 +103,7 @@ def executar_ordem(provider: MT5DataProvider, logger: TradeLogger, symbol: str, 
         # --- NOTIFICAÇÃO TELEGRAM ---
         msg = (
             f"Ordem de *{operation_str}* enviada para `{symbol}`.\n\n"
+            f"• *Parâmetro BB Dev:* `{strategy_engine.bb_entry_std_dev:.4f}`\n"
             f"• *Preço Entrada:* `{result.price:.5f}`\n"
             f"• *Stop Loss:* `{result.sl:.5f}`\n"
             f"• *Lote:* `{result.volume}` | *Ticket:* `{result.order}`"
@@ -107,11 +120,20 @@ def monitorar_posicoes_abertas():
     # ... (código sem alteração)
     pass
 
-def processar_ativo(provider: MT5DataProvider, logger: TradeLogger, symbol: str):
+def processar_ativo(provider: MT5DataProvider, logger: TradeLogger, symbol: str, optimal_params_df: pd.DataFrame):
+    
+    # --- HANDOVER EM AÇÃO ---
+    best_dev = BB_ENTRY_STD_DEV_DEFAULT
+    if not optimal_params_df.empty and symbol in optimal_params_df.index:
+        best_dev = optimal_params_df.loc[symbol]['Best BB Dev']
+    
+    strategy_engine = AdaptiveSniperStrategy(bb_entry_std_dev=best_dev)
+    # --- FIM DO HANDOVER ---
+
     df = provider.get_data(symbol, MT5_TIMEFRAME_STR, limit=N_BARS_TO_FETCH)
     if df.empty or len(df) < 200: return
 
-    df_indic = calculate_indicators(df)
+    df_indic = calculate_indicators(df, bb_entry_deviation=best_dev)
     df_analyzed = strategy_engine.evaluate(df_indic)
     latest = df_analyzed.iloc[-1]
 
@@ -126,7 +148,7 @@ def processar_ativo(provider: MT5DataProvider, logger: TradeLogger, symbol: str)
 
     if not has_position and not is_regime_toxic:
         if latest.get('SIGNAL') == 'BUY':
-            executar_ordem(provider, logger, symbol, mt5.ORDER_TYPE_BUY, latest)
+            executar_ordem(provider, logger, symbol, mt5.ORDER_TYPE_BUY, latest, strategy_engine)
 
 def run_bot():
     provider = None
@@ -135,6 +157,10 @@ def run_bot():
         # --- INICIALIZAÇÃO DOS SERVIÇOS ---
         provider = MT5DataProvider()
         logger = TradeLogger()
+
+        # --- CARREGANDO A INTELIGÊNCIA ---
+        ranking_path = project_root.parent / "data" / "reports" / "professional_stability_ranking.csv"
+        optimal_params = load_optimal_parameters(ranking_path)
         
         ativos = obter_ativos_monitorados()
         
@@ -147,7 +173,7 @@ def run_bot():
             if is_trading_hours():
                 for ativo in ativos:
                     try:
-                        processar_ativo(provider, logger, ativo)
+                        processar_ativo(provider, logger, ativo, optimal_params)
                     except Exception as e:
                         # Erro no processamento de um ativo específico, não fatal para o robô
                         error_msg = f"Erro ao processar o ativo `{ativo}`: `{e}`"
@@ -164,9 +190,13 @@ def run_bot():
         
     except Exception as e:
         error_details = traceback.format_exc()
-        fatal_message = f"O robô encontrou um erro fatal!\n\n*Exceção:*
-```{e}```\n\n*Traceback:*
-```{error_details}```"
+        fatal_message = f"""O robô encontrou um erro fatal!
+
+*Exceção:*
+```{e}```
+
+*Traceback:*
+```{error_details}```"""
         send_message(fatal_message, type='FATAL')
         print(f"\n💀 ERRO FATAL: {e}")
         traceback.print_exc()

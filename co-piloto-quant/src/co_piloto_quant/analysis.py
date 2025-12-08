@@ -36,10 +36,9 @@ def calculate_indicators(
     hurst_window: int = 72,
     entropy_window: int = 20,
     halflife_window: int = 60,
-    stoch_k_window: int = 80,
     stoch_d_window: int = 3,
     bb_entry_deviation: float = 0.45,
-    calculate_hurst: bool = True 
+    calculate_hurst: bool = True
 ) -> pd.DataFrame:
     
     if 'close' in df.columns:
@@ -57,7 +56,7 @@ def calculate_indicators(
     bb_df = bollinger_bands(df, period=BB_PERIOD, std_devs=all_bb_deviations)
     df = safe_join(df, bb_df)
 
-    stoch_df = calculate_stochastic_custom(df, k_period=stoch_k_window, k_smooth=STOCH_K_SMOOTH, d_smooth=stoch_d_window)
+    stoch_df = calculate_stochastic_custom(df, k_period=STOCH_K_PERIOD, k_smooth=STOCH_K_SMOOTH, d_smooth=stoch_d_window)
     df = safe_join(df, stoch_df)
 
     obtr_tpm = calculate_system_tpm(df, indicator='obtr', period=SYSTEM_PERIOD, deviations=SYSTEM_DEVIATIONS)
