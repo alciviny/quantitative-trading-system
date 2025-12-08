@@ -39,7 +39,8 @@ class AdaptiveSniperStrategy(Strategy):
     Utiliza Z-Scores de Hurst e Entropia para filtrar regimes, 
     e Bandas de Bollinger + Estocástico para gatilhos precisos.
     """
-    def __init__(self, bb_exit_std_dev: float = 2.0, entropy_chaos_threshold: float = 1.0):
+    def __init__(self, bb_entry_std_dev: float = 0.45, bb_exit_std_dev: float = 2.0, entropy_chaos_threshold: float = 1.0):
+        self.bb_entry_std_dev = bb_entry_std_dev
         self.bb_exit_std_dev = bb_exit_std_dev
         self.entropy_chaos_threshold = entropy_chaos_threshold
 
@@ -50,10 +51,8 @@ class AdaptiveSniperStrategy(Strategy):
         df = df.copy()
         
         # 1. Definição centralizada dos nomes das colunas via IndicatorNames
-        bb_dev_entry = 0.45 
-        
-        col_bb_upper = IndicatorNames.bollinger_upper(BB_PERIOD, bb_dev_entry)
-        col_bb_lower = IndicatorNames.bollinger_lower(BB_PERIOD, bb_dev_entry)
+        col_bb_upper = IndicatorNames.bollinger_upper(BB_PERIOD, self.bb_entry_std_dev)
+        col_bb_lower = IndicatorNames.bollinger_lower(BB_PERIOD, self.bb_entry_std_dev)
         
         # A banda de saída agora é configurável
         col_bb_upper_exit = IndicatorNames.bollinger_upper(BB_PERIOD, self.bb_exit_std_dev)

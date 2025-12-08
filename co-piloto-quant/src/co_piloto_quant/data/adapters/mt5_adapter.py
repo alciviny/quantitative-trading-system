@@ -1,6 +1,6 @@
 import MetaTrader5 as mt5
 import pandas as pd
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 from co_piloto_quant.data.interface import MarketDataProvider
 
@@ -96,7 +96,7 @@ class MT5DataProvider(MarketDataProvider):
         if s_info.filling_mode & mt5.ORDER_FILLING_IOC: return mt5.ORDER_FILLING_IOC
         return mt5.ORDER_FILLING_FOK
     
-    def get_symbol_info_tick(self, symbol: str) -> Optional[mt5.SymbolInfoTick]:
+    def get_symbol_info_tick(self, symbol: str) -> Optional[Any]:
         return mt5.symbol_info_tick(symbol)
     
     def get_symbol_info(self, symbol: str) -> Optional[mt5.SymbolInfo]:

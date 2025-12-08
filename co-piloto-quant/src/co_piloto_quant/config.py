@@ -19,6 +19,7 @@ PROCESSED_DATA_PATH.mkdir(parents=True, exist_ok=True)
 
 # Indicadores
 BB_PERIOD = 200
+BB_ENTRY_STD_DEV_DEFAULT = 0.45  # Parâmetro de fallback para o robô, caso não encontre no ranking
 PRICE_BB_DEVIATIONS = [0.45, 1.0, 1.5, 2.0] # 0.45 é o "Squeeze" do Sniper
 IFR_PERIOD = 120            # Período para o IFR (RSI)
 SYSTEM_PERIOD = 200         # Período para o System TPM (OBTR/WAD)
