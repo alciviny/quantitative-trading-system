@@ -22,9 +22,9 @@ SLIPPAGE_PCT = 0.001
 
 # --- CONFIGURAÇÕES DA ESTRATÉGIA ---
 BB_EXIT_STD_DEV = 2.0
-ENTROPY_CHAOS_THRESHOLD = 3.2
-LIMIT_VOL_VOL = 0.030 # AJUSTE FINO: Apertado de 0.040 para 0.030
-LIMIT_RAW_VOL = 0.035 # NOVO: Filtro de Volatilidade Pura (Anti-Turbulência)
+ENTROPY_CHAOS_THRESHOLD = 4.5
+LIMIT_VOL_VOL = 0.050 # AJUSTE FINO: Apertado de 0.040 para 0.030
+LIMIT_RAW_VOL = 0.060 # NOVO: Filtro de Volatilidade Pura (Anti-Turbulência)
 
 # --- CONFIGURAÇÃO DE LOGS ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

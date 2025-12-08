@@ -1,4 +1,5 @@
 import pandas as pd
+from co_piloto_quant.indicators.names import IndicatorNames
 
 def calculate_stochastic_custom(data: pd.DataFrame, k_period: int = 80, k_smooth: int = 3, d_smooth: int = 3) -> pd.DataFrame:
     """
@@ -30,11 +31,11 @@ def calculate_stochastic_custom(data: pd.DataFrame, k_period: int = 80, k_smooth
 
     # 2. Cálculo do %K Lento (Slow %K)
     slow_k = raw_k.rolling(window=k_smooth).mean()
-    slow_k.name = f'stoch_k_{k_period}_{k_smooth}'
+    slow_k.name = IndicatorNames.stochastic_k(k_period, k_smooth)
 
     # 3. Cálculo do %D (Linha de Sinal)
     slow_d = slow_k.rolling(window=d_smooth).mean()
-    slow_d.name = f'stoch_d_{k_period}_{k_smooth}_{d_smooth}'
+    slow_d.name = IndicatorNames.stochastic_d(k_period, k_smooth, d_smooth)
 
     result_df = pd.concat([slow_k, slow_d], axis=1)
 

@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from co_piloto_quant.indicators.names import IndicatorNames
 
 def calculate_rolling_hurst(data: pd.Series, window: int = 100, kind: str = 'returns', min_lag: int = 8) -> pd.Series:
     """
@@ -128,6 +129,5 @@ def calculate_rolling_hurst(data: pd.Series, window: int = 100, kind: str = 'ret
     # min_periods=window garante janelas completas
     hurst_series = series.rolling(window=window, min_periods=window).apply(get_hurst_loglog, raw=False)
     
-    # Mantivemos o nome antigo para compatibilidade com analysis.py e run_scanner.py
-    hurst_series.name = f'Hurst_{window}_{kind}' 
+    hurst_series.name = IndicatorNames.hurst(window, kind)
     return hurst_series
