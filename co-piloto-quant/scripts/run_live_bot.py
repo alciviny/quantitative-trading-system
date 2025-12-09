@@ -56,7 +56,7 @@ def is_trading_hours():
 def obter_ativos_monitorados():
     if TRADING_WHITELIST:
         return TRADING_WHITELIST
-    symbols = mt5.symbols_get(group="!*.ECN")
+    symbols = mt5.symbols_get()
     return [s.name for s in symbols] if symbols else []
 
 def executar_ordem(provider: MT5DataProvider, logger: TradeLogger, symbol: str, tipo_ordem: int, signal_data: pd.Series, strategy_engine: AdaptiveSniperStrategy):

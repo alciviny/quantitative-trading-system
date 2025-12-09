@@ -6,206 +6,202 @@ import os
 import logging
 from tqdm import tqdm
 import concurrent.futures
-from datetime import datetime
+import scipy.ndimage
 
 from co_piloto_quant.data.database import load_price_data
 from co_piloto_quant.analysis import calculate_indicators
-from co_piloto_quant.utils import get_expanded_universe
+from co_piloto_quant.universe import get_expanded_universe
 from co_piloto_quant.config import BB_PERIOD, STOCH_K_PERIOD, STOCH_K_SMOOTH
 from co_piloto_quant.indicators.names import IndicatorNames
 
+# ===================== CONFIGURAÇÃO DO SWEEP =====================
 
-# --- CONFIGURAÇÕES DO BACKTEST ---
-INITIAL_CAPITAL = 100000
-STOP_LOSS_PCT = 0.06
-FEES_PCT = 0.0006
-SLIPPAGE_PCT = 0.001
+BB_DEV_RANGE = np.arange(0.20, 0.81, 0.05)
+VOL_MAX_RANGE = np.arange(0.8, 2.5, 0.15)  # regime-aware ratio
 
-# --- CONFIGURAÇÕES DA ESTRATÉGIA E FILTROS ---
 BB_EXIT_STD_DEV = 2.0
-ENTROPY_CHAOS_THRESHOLD = 4.5
-LIMIT_VOL_VOL = 0.050
-LIMIT_RAW_VOL = 0.060
+INITIAL_CAPITAL = 100000
+FEES_PCT = 0.0006
+OUTPUT_DIR = "data/reports"
 
-# --- CONFIGURAÇÃO DE LOGS ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 warnings.filterwarnings('ignore')
 
-def run_stability_analysis(ticker: str):
-    """
-    Executa uma análise de estabilidade de parâmetros para um único ativo,
-    varrendo uma faixa de desvios padrão da Banda de Bollinger.
-    """
+
+# ===================== CORE FUNCTION =====================
+
+def run_matrix_optimization(ticker: str):
+
     df_raw = load_price_data(ticker)
-    if df_raw is None or df_raw.empty or len(df_raw) < 252: # Aumentado para ter mais dados para z-score
+    if df_raw is None or len(df_raw) < 400:
         return None
 
-    # 1. Calcula todos os indicadores necessários, exceto as bandas que serão vetorizadas
-    df = calculate_indicators(df_raw, bb_entry_deviation=0) # Passamos 0 para não interferir
+    df = calculate_indicators(df_raw, bb_entry_deviation=0.0)
     if df is None or df.empty:
         return None
 
-    # --- PROFISSIONALISMO 1: VARREDURA DE PARÂMETROS ---
-    bb_dev_range = np.arange(0.2, 0.85, 0.05)
     closes = df['close']
 
-    # 2. Cálculo Vetorizado das Bandas de Bollinger para a varredura
-    bb_bands_sweep = vbt.BBANDS.run(closes, window=BB_PERIOD, alpha=bb_dev_range)
-    bb_lower_sweep = bb_bands_sweep.lower
-    bb_upper_sweep = bb_bands_sweep.upper
-    
-    # A banda de saída permanece fixa, conforme lógica original
-    bb_upper_exit = vbt.BBANDS.run(closes, window=BB_PERIOD, alpha=BB_EXIT_STD_DEV).upper
+    # ===================== BB MATRIX =====================
 
-    # 3. Construção Vetorizada dos Sinais
-    # Nomes das colunas para os filtros
-    col_stoch_k  = IndicatorNames.stochastic_k(STOCH_K_PERIOD, STOCH_K_SMOOTH)
-    col_hurst_z  = IndicatorNames.hurst_z()
-    col_entropy_z = IndicatorNames.entropy_z(20)
+    bb = vbt.BBANDS.run(closes, window=BB_PERIOD, alpha=BB_DEV_RANGE)
+    entry_bb = closes.vbt <= bb.lower  # (rows, BB)
 
-    # Filtros de regime e estocástico (colunas únicas que serão broadcast)
-    mask_regime_ok = (df[col_hurst_z].fillna(0) >= -0.5) & \
-                     (df[col_entropy_z].fillna(10) <= ENTROPY_CHAOS_THRESHOLD)
-    mask_stoch_buy = df[col_stoch_k] < 30
+    # ===================== VOL REGIME AWARE =====================
 
-    # Lógica de entrada vetorizada (multi-coluna)
-    mask_buy_zone = (closes.values[:, None] >= bb_lower_sweep) & (closes.values[:, None] <= bb_upper_sweep)
-    entries = mask_buy_zone & mask_stoch_buy.values[:, None] & mask_regime_ok.values[:, None]
+    ret = closes.pct_change()
 
-    # --- CAMADA DE SEGURANÇA ADAPTATIVA (QUANTILE-BASED) ---
-    returns = df['close'].pct_change()
-    df['VolVol'] = returns.rolling(20).std().diff().abs()
-    df['RawVol'] = returns.rolling(20).std()
-    
-    # Lógica "Profissional" (Adaptativa)
-    # Calcula o percentil 90 da volatilidade e entropia nos últimos 500 dias
-    rolling_vol_thresh = df['RawVol'].rolling(500, min_periods=30).quantile(0.90)
-    
-    col_entropy_raw = IndicatorNames.entropy(20)
-    rolling_entropy_thresh = df[col_entropy_raw].rolling(500, min_periods=30).quantile(0.90)
+    vol_fast = ret.rolling(10).std()
+    vol_slow = ret.rolling(60).std()
 
-    # Condições de filtro adaptativas
-    vol_vol_cond = df['VolVol'] <= LIMIT_VOL_VOL # Mantido como filtro de choque de curto prazo
-    raw_vol_cond = df['RawVol'] <= rolling_vol_thresh
-    raw_entropy_cond = df[col_entropy_raw] <= rolling_entropy_thresh
+    regime_vol = vol_fast / (vol_slow + 1e-6)
+    vol_mask = regime_vol.values[:, None] <= VOL_MAX_RANGE[None, :]
 
-    # Máscara final de risco:
-    risk_safe = vol_vol_cond & raw_vol_cond & raw_entropy_cond
-    
-    # Aplica o filtro de risco do backtest sobre os sinais de entrada
-    entries = entries & risk_safe.values[:, None]
-    
-    # Lógica de saída (coluna única, será broadcast)
-    exits = closes >= bb_upper_exit
+    # ===================== COMBINAÇÃO 3D =====================
 
-    # Shift para evitar look-ahead bias
-    entries = entries.shift(1).fillna(False)
-    exits = exits.shift(1).fillna(False)
+    entries_3d = entry_bb.values[:, :, None] & vol_mask[:, None, :]
 
-    if not entries.any().any():
-        return None
+    # ===================== STOCH SUAVE =====================
 
-    # 4. Execução do Backtest Massivo
-    portfolio = vbt.Portfolio.from_signals(
-        close=closes,
-        entries=entries,
-        exits=exits,
-        sl_stop=STOP_LOSS_PCT,
+    stoch_col = IndicatorNames.stochastic_k(STOCH_K_PERIOD, STOCH_K_SMOOTH)
+    stoch_k = df[stoch_col].values
+
+    stoch_weight = np.clip((30 - stoch_k) / 30, 0, 1)
+    entries_3d = entries_3d * stoch_weight[:, None, None]
+
+    final_entries = entries_3d > 0.5
+
+    # ===================== RESHAPE =====================
+
+    n_rows, n_bb, n_vol = final_entries.shape
+    entries_2d = final_entries.reshape(n_rows, n_bb * n_vol)
+
+    # ===================== EXIT =====================
+
+    bb_exit = vbt.BBANDS.run(closes, window=BB_PERIOD, alpha=BB_EXIT_STD_DEV)
+    exits_2d = (closes.vbt >= bb_exit.upper).vbt.tile(n_bb * n_vol)
+
+    # ===================== STOP ADAPTATIVO =====================
+
+    adaptive_sl_series = pd.Series(
+        np.clip(
+            ret.rolling(20).std().values * 4,
+            0.03,
+            0.10
+        ),
+        index=closes.index
+    )
+    adaptive_sl = adaptive_sl_series.vbt.tile(n_bb * n_vol)
+
+    # ===================== PORTFOLIO =====================
+
+    pf = vbt.Portfolio.from_signals(
+        closes,
+        entries_2d,
+        exits_2d,
+        sl_stop=adaptive_sl,
         init_cash=INITIAL_CAPITAL,
         fees=FEES_PCT,
-        slippage=SLIPPAGE_PCT,
         freq='1D'
     )
-    
-    return portfolio
 
-def process_single_ticker_stability(ticker: str):
-    """
-    Função wrapper para executar a análise de estabilidade, capturar exceções
-    e retornar um dicionário com métricas de robustez e o melhor parâmetro.
-    """
+    # ===================== MÉTRICAS =====================
+
+    sharpe = pf.sharpe_ratio()
+    calmar = pf.calmar_ratio()
+    max_dd = pf.max_drawdown()
+
+    robust_score = sharpe * calmar / (1 + abs(max_dd))
+
+    robust_matrix = robust_score.values.reshape(n_bb, n_vol)
+
+    # ===================== CLUSTER DE ESTABILIDADE =====================
+
+    smooth = scipy.ndimage.uniform_filter(robust_matrix, size=3)
+    best_idx = np.unravel_index(np.nanargmax(smooth), smooth.shape)
+
+    best_bb = BB_DEV_RANGE[best_idx[0]]
+    best_vol = VOL_MAX_RANGE[best_idx[1]]
+
+    best_raw_score = robust_matrix[best_idx]
+
+    # ===================== ANÁLISE DE ROBUSTEZ =====================
+
+    mean_score = np.nanmean(robust_matrix)
+    std_score = np.nanstd(robust_matrix)
+
+    stability = mean_score / (std_score + 1e-6)
+    overfit_risk = best_raw_score / (mean_score + 1e-6)
+
+    grad_bb, grad_vol = np.gradient(smooth)
+    sensitivity = np.mean(np.abs(grad_bb)) + np.mean(np.abs(grad_vol))
+
+    # ===================== REGIME =====================
+
+    regime = "Híbrido"
+    if best_vol < 1.1:
+        regime = "Conservador (Calmaria)"
+    elif best_vol > 2.0:
+        regime = "Agressivo (Caos)"
+
+    return {
+        'Ticker': ticker,
+        'Regime Type': regime,
+        'Best BB Dev': best_bb,
+        'Max Vol Ratio': best_vol,
+        'Robust Score': best_raw_score,
+        'Stability Score': stability,
+        'Overfit Risk': overfit_risk,
+        'Param Sensitivity': sensitivity,
+        'Sharpe Opt': sharpe.values.reshape(n_bb, n_vol)[best_idx],
+        'Calmar Opt': calmar.values.reshape(n_bb, n_vol)[best_idx],
+        'Max DD': max_dd.values.reshape(n_bb, n_vol)[best_idx]
+    }
+
+
+def process_wrapper(ticker):
     try:
-        pf = run_stability_analysis(ticker)
-        if pf:
-            sharpe_ratios = pf.sharpe_ratio()
-            
-            # Filtra parâmetros que não geraram trades ou tiveram poucos trades
-            sharpe_ratios = sharpe_ratios[pf.trades.count() > 3]
-
-            if len(sharpe_ratios) < 3: # Exige um mínimo de resultados válidos
-                return None
-
-            # --- O NOVO "HANDOVER": ENCONTRAR O MELHOR PARÂMETRO ---
-            # Encontra o desvio (que está no índice) que corresponde ao maior Sharpe
-            best_param_dev = sharpe_ratios.idxmax()
-
-            # --- ANÁLISE DE ROBUSTEZ ---
-            sharpe_medio = sharpe_ratios.mean()
-            sharpe_std = sharpe_ratios.std()
-            pct_sharpe_positivo = (sharpe_ratios > 0).sum() / len(sharpe_ratios) * 100
-            stability_factor = sharpe_medio / (sharpe_std + 1e-6)
-
-            return {
-                'Ticker': ticker,
-                'Best BB Dev': best_param_dev,
-                'Sharpe Medio': sharpe_medio,
-                'Sharpe Std Dev': sharpe_std,
-                'Pct Parametros Positivos (%)': pct_sharpe_positivo,
-                'Fator de Estabilidade': stability_factor,
-                'Num Parametros Testados': len(sharpe_ratios)
-            }
+        return run_matrix_optimization(ticker)
     except Exception as e:
-        logger.error(f"Falha na análise de estabilidade de {ticker}: {e}", exc_info=False)
-    
-    return None
+        logger.error(f"{ticker} erro: {e}")
+        return None
+
+
+# ===================== EXECUÇÃO =====================
 
 if __name__ == "__main__":
+
     tickers = get_expanded_universe()
-    todos_resultados = []
+    results = []
 
-    logger.info(f"--- INICIANDO ANÁLISE DE ESTABILIDADE E OTIMIZAÇÃO PARA {len(tickers)} ATIVOS ---")
-    
-    with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
-        future_to_ticker = {executor.submit(process_single_ticker_stability, ticker): ticker for ticker in tickers}
-        
-        for future in tqdm(concurrent.futures.as_completed(future_to_ticker), total=len(tickers), desc="Gerando Ranking de Estabilidade"):
-            resultado = future.result()
-            if resultado:
-                todos_resultados.append(resultado)
+    print(f"\n🚀 MATRIX OPTIMIZATION (ROBUST + REGIME AWARE)")
+    print("=" * 80)
 
-    logger.info(f"Análise concluída. {len(todos_resultados)} ativos tiveram resultados.")
+    with concurrent.futures.ProcessPoolExecutor(os.cpu_count()) as executor:
+        futures = {executor.submit(process_wrapper, t): t for t in tickers}
+        for f in tqdm(concurrent.futures.as_completed(futures), total=len(tickers)):
+            if (res := f.result()):
+                results.append(res)
 
-    if todos_resultados:
-        df_report = pd.DataFrame(todos_resultados)
-        
-        print("\n\n" + "="*80)
-        print("          🏆 TOP 10 ATIVOS POR ESTABILIDADE (Fator de Estabilidade)")
-        print("="*80)
-        df_top_estaveis = df_report.sort_values(by='Fator de Estabilidade', ascending=False).head(10)
-        print(df_top_estaveis.to_string(index=False))
-        
-        print("\n\n" + "="*80)
-        print("          👍 TOP 10 ATIVOS POR PARÂMETRO ÓTIMO (Melhor Sharpe)")
-        print("="*80)
-        df_top_sharpe = df_report.sort_values(by='Sharpe Medio', ascending=False).head(10)
-        print(df_top_sharpe.to_string(index=False))
-        print("="*80)
+    if results:
+        df = pd.DataFrame(results)
 
-        # --- EXPORTAÇÃO DO RELATÓRIO DE HANDOVER ---
-        try:
-            report_dir = 'data/reports'
-            os.makedirs(report_dir, exist_ok=True)
-            report_path = os.path.join(report_dir, 'professional_stability_ranking.csv')
-            
-            df_report_sorted = df_report.sort_values(by='Fator de Estabilidade', ascending=False)
-            # Aumentar precisão para garantir que o robô leia o valor exato do desvio
-            df_report_sorted.to_csv(report_path, index=False, float_format='%.4f') 
-            
-            logger.info(f"Relatório de handover com {len(df_report)} ativos salvo em: {report_path}")
-        except Exception as e:
-            logger.error(f"Falha ao salvar o relatório de handover: {e}")
+        df_final = (
+            df[df['Robust Score'] > 0]
+            .sort_values(['Stability Score', 'Overfit Risk'],
+                         ascending=[False, True])
+        )
+
+        print("\n🏆 TOP 10 ATIVOS MAIS ROBUSTOS")
+        print(df_final.head(10).to_string(index=False))
+
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        out = os.path.join(OUTPUT_DIR, "matrix_regime_robust_ranking.csv")
+        df_final.to_csv(out, index=False, float_format="%.4f")
+        print(f"\n💾 Relatório salvo em: {out}")
 
     else:
-        logger.warning("Nenhuma análise produziu resultados para gerar um relatório.")
+        print("❌ Nenhum ativo viável.")
