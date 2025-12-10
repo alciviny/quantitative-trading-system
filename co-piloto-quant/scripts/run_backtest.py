@@ -13,6 +13,7 @@ from co_piloto_quant.analysis import calculate_indicators
 from co_piloto_quant.universe import get_expanded_universe
 from co_piloto_quant.config import BB_PERIOD, STOCH_K_PERIOD, STOCH_K_SMOOTH
 from co_piloto_quant.indicators.names import IndicatorNames
+from co_piloto_quant.strategies.vectorized import generate_signals_vectorized
 
 # ===================== CONFIGURAÇÃO DO SWEEP =====================
 
@@ -39,53 +40,32 @@ def run_matrix_optimization(ticker: str):
     if df_raw is None or len(df_raw) < 400:
         return None
 
-    df = calculate_indicators(df_raw, bb_entry_deviation=0.0)
+    # O `calculate_indicators` agora serve apenas para pré-cache ou indicadores auxiliares
+    # A lógica principal da estratégia não depende mais dele diretamente aqui.
+    df = calculate_indicators(df_raw)
     if df is None or df.empty:
         return None
 
     closes = df['close']
 
-    # ===================== BB MATRIX =====================
+    # ===================== GERAÇÃO DE SINAIS (VETORIZADA) =====================
+    # A lógica complexa de sinais foi movida para o "cérebro" da estratégia.
+    # Este script apenas consome a função, passando os parâmetros.
+    entries_2d, exits_2d = generate_signals_vectorized(
+        price=closes,
+        bb_dev_range=BB_DEV_RANGE,
+        vol_max_range=VOL_MAX_RANGE,
+        bb_exit_std_dev=BB_EXIT_STD_DEV
+    )
 
-    bb = vbt.BBANDS.run(closes, window=BB_PERIOD, alpha=BB_DEV_RANGE)
-    entry_bb = closes.vbt <= bb.lower  # (rows, BB)
-
-    # ===================== VOL REGIME AWARE =====================
-
-    ret = closes.pct_change()
-
-    vol_fast = ret.rolling(10).std()
-    vol_slow = ret.rolling(60).std()
-
-    regime_vol = vol_fast / (vol_slow + 1e-6)
-    vol_mask = regime_vol.values[:, None] <= VOL_MAX_RANGE[None, :]
-
-    # ===================== COMBINAÇÃO 3D =====================
-
-    entries_3d = entry_bb.values[:, :, None] & vol_mask[:, None, :]
-
-    # ===================== STOCH SUAVE =====================
-
-    stoch_col = IndicatorNames.stochastic_k(STOCH_K_PERIOD, STOCH_K_SMOOTH)
-    stoch_k = df[stoch_col].values
-
-    stoch_weight = np.clip((30 - stoch_k) / 30, 0, 1)
-    entries_3d = entries_3d * stoch_weight[:, None, None]
-
-    final_entries = entries_3d > 0.5
-
-    # ===================== RESHAPE =====================
-
-    n_rows, n_bb, n_vol = final_entries.shape
-    entries_2d = final_entries.reshape(n_rows, n_bb * n_vol)
-
-    # ===================== EXIT =====================
-
-    bb_exit = vbt.BBANDS.run(closes, window=BB_PERIOD, alpha=BB_EXIT_STD_DEV)
-    exits_2d = (closes.vbt >= bb_exit.upper).vbt.tile(n_bb * n_vol)
-
+    # O número de combinações é inferido da forma das matrizes de sinais
+    n_bb = len(BB_DEV_RANGE)
+    n_vol = len(VOL_MAX_RANGE)
+    
     # ===================== STOP ADAPTATIVO =====================
 
+    # O stop loss continua sendo uma configuração do backtest, não da estratégia em si.
+    ret = closes.pct_change()
     adaptive_sl_series = pd.Series(
         np.clip(
             ret.rolling(20).std().values * 4,
