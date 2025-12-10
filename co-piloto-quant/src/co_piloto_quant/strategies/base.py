@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from abc import ABC, abstractmethod
+import os
 
 # Importamos as configurações e o novo registry de nomes
 from co_piloto_quant.config import (
@@ -13,18 +14,27 @@ from co_piloto_quant.indicators.names import IndicatorNames
 class Strategy(ABC):
     """
     Classe base abstrata para todas as estratégias de trading.
-    Define a interface que todas as estratégias concretas devem seguir.
+    Define a interface que todas as estratégias concretas devem seguir,
+    incluindo um pipeline de logging para persistência de dados.
     """
 
-    @abstractmethod
-    def evaluate(self, df: pd.DataFrame) -> pd.DataFrame:
+    def __init__(self, save_logs: bool = False):
         """
-        Avalia a estratégia com base nos dados de mercado fornecidos.
+        Inicializa a estratégia.
         Args:
-            df (pd.DataFrame): DataFrame contendo dados de OHLCV e indicadores técnicos.
+            save_logs (bool): Se True, salva o snapshot completo da estratégia em cada avaliação.
+        """
+        self.save_logs = save_logs
+
+    @abstractmethod
+    def _calculate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Método central que contém a lógica de cálculo de sinais da estratégia.
+        Deve ser implementado por cada subclasse.
+        Args:
+            df (pd.DataFrame): DataFrame contendo dados de OHLCV e todos os indicadores.
         Returns:
-            pd.DataFrame: O DataFrame original com uma coluna adicional 'SIGNAL'
-                          contendo 'BUY', 'SELL' ou 'HOLD'.
+            pd.DataFrame: O DataFrame com as colunas de decisão (ex: 'SIGNAL').
         """
         pass
 
@@ -33,13 +43,52 @@ class Strategy(ABC):
         """Retorna o nome único da estratégia."""
         pass
 
+    def evaluate(self, df: pd.DataFrame, ticker: str) -> pd.DataFrame:
+        """
+        Orquestrador: avalia a estratégia e salva um snapshot se o logging estiver habilitado.
+        Args:
+            df (pd.DataFrame): DataFrame de entrada com indicadores.
+            ticker (str): O ticker do ativo sendo avaliado, usado para nomear o arquivo de log.
+        Returns:
+            pd.DataFrame: O DataFrame final com os sinais calculados.
+        """
+        # 1. Calcula os sinais usando a implementação da subclasse
+        # Usamos uma cópia para garantir que o DataFrame original não seja modificado
+        df_evaluated = self._calculate_signals(df.copy())
+
+        # 2. Salva o "Deep Log" se a opção estiver habilitada
+        if self.save_logs:
+            self._save_strategy_snapshot(df_evaluated, ticker)
+
+        return df_evaluated
+
+    def _save_strategy_snapshot(self, df: pd.DataFrame, ticker: str):
+        """
+        Salva o DataFrame do estado completo da estratégia em um arquivo Parquet.
+        Este método contém toda a granularidade necessária para análises de ML futuras.
+        """
+        try:
+            output_dir = "data/strategy_logs"
+            os.makedirs(output_dir, exist_ok=True)
+            file_path = os.path.join(output_dir, f"{ticker}_deep_log.parquet")
+            
+            # Salva em formato Parquet, que é eficiente para grandes DataFrames
+            df.to_parquet(file_path, index=True, engine='pyarrow')
+            
+        except Exception as e:
+            # Não quebra a execução principal se o log falhar, apenas avisa.
+            print(f"Alerta [Deep Logging]: Não foi possível salvar o log para o ticker {ticker}. Erro: {e}")
+
+
 class AdaptiveSniperStrategy(Strategy):
     """
     Implementação da estratégia 'Sniper Adaptativo'.
     Utiliza Z-Scores de Hurst e Entropia para filtrar regimes, 
     e Bandas de Bollinger + Estocástico para gatilhos precisos.
     """
-    def __init__(self, bb_entry_std_dev: float = 0.45, bb_exit_std_dev: float = 2.0, entropy_chaos_threshold: float = 1.0):
+    def __init__(self, bb_entry_std_dev: float = 0.45, bb_exit_std_dev: float = 2.0, entropy_chaos_threshold: float = 1.0, save_logs: bool = False):
+        # Passa o controle do logging para a classe pai
+        super().__init__(save_logs=save_logs)
         self.bb_entry_std_dev = bb_entry_std_dev
         self.bb_exit_std_dev = bb_exit_std_dev
         self.entropy_chaos_threshold = entropy_chaos_threshold
@@ -47,8 +96,8 @@ class AdaptiveSniperStrategy(Strategy):
     def get_name(self) -> str:
         return "AdaptiveSniperStrategy"
 
-    def evaluate(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = df.copy()
+    def _calculate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
+        """ Lógica de cálculo de sinais, antes contida em 'evaluate'. """
         
         # 1. Definição centralizada dos nomes das colunas via IndicatorNames
         col_bb_upper = IndicatorNames.bollinger_upper(BB_PERIOD, self.bb_entry_std_dev)
@@ -68,8 +117,6 @@ class AdaptiveSniperStrategy(Strategy):
         required_cols = [col_bb_upper, col_stoch_k, col_hurst_z, col_entropy_z, col_bb_upper_exit]
         missing_cols = [c for c in required_cols if c not in df.columns]
         if missing_cols:
-            # Se uma coluna essencial não existe, não podemos prosseguir.
-            # Isso pode acontecer se os dados não forem suficientes para calcular os indicadores.
             return df
 
         # 3. Filtros de Regime, agora usando o threshold de entropia configurável
@@ -93,7 +140,6 @@ class AdaptiveSniperStrategy(Strategy):
         
         # 5. Lógica de VENDA, agora usando a banda de saída configurável
         mask_trend_down = df['close'] < df.get(col_wwma, np.inf)
-        # A saída agora busca um toque na banda superior de SAÍDA
         mask_sell_zone = df['close'] >= df[col_bb_upper_exit]
         mask_stoch_sell = df[col_stoch_k] > 70
         
@@ -109,7 +155,6 @@ class AdaptiveSniperStrategy(Strategy):
         
         df['STOP_LOSS'] = np.nan
         df.loc[final_buy_signal, 'STOP_LOSS'] = df.loc[final_buy_signal, col_bb_lower]
-        # O stop de venda (take profit) poderia ser a própria banda de saída
         df.loc[final_sell_signal, 'STOP_LOSS'] = df.loc[final_sell_signal, col_bb_upper_exit]
 
         return df
