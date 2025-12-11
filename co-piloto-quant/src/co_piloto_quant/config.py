@@ -39,6 +39,12 @@ HURST_WINDOW = 72
 ENTROPY_WINDOW = 20
 REGIME_STRICTNESS = 'NORMAL' # 'LOOSE', 'NORMAL', 'STRICT'
 
+# --- 2.1. SELEÇÃO DA ESTRATÉGIA ATIVA ---
+# Define qual arquivo de estratégia dentro da pasta 'strategies' será carregado.
+# O nome deve ser exatamente o do arquivo, sem a extensão .py.
+# Ex: 'rules' para carregar 'strategies/rules.py'
+ACTIVE_STRATEGY = 'rules'
+
 # --- NOVO: FILTROS FORENSES (A "Vacina" Anti-Loss) ---
 # Baseado na Análise Forense de 07/12/2025:
 # - Ativos com Volatilidade > 2.1% ao dia tendem a estopar.

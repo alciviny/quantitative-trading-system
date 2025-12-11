@@ -23,6 +23,7 @@ from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_
 from co_piloto_quant.indicators.special.half_life import calculate_rolling_ou_params
 from co_piloto_quant.utils.math_tools import safe_join
 from co_piloto_quant.indicators.names import IndicatorNames
+from co_piloto_quant.strategies.loader import load_strategy
 
 
 # --- PARÂMETROS ---
@@ -76,68 +77,58 @@ def executar_visualizacao():
         print("❌ Nenhum dado encontrado ou dados insuficientes. Verifique se o ativo está na Observação de Mercado.")
         return
 
-    print("🧮  Calculando Indicadores com a nova arquitetura...")
+    print("🧮  Calculando todos os indicadores necessários para a estratégia...")
     
-    # --- ARQUITETURA REATORADA ---
-    # 1. Usar o IndicatorEngine para indicadores padrão
+    # 1. Configurar o IndicatorEngine com TODOS os indicadores que a(s) estratégia(s) podem usar
     engine = IndicatorEngine(df)
     engine.add_indicator(
         'bollinger_bands', 
         period=config.BB_PERIOD, 
-        std_devs=config.PRICE_BB_DEVIATIONS # Usa a lista completa do config
+        std_devs=[config.BB_ENTRY_STD_DEV_DEFAULT, 2.0] # Adiciona os dois desvios usados
     ).add_indicator(
         'stochastic',
-        k_period=STOCH_K_VISUAL, # Usa o período específico da visualização (80)
+        k_period=config.STOCH_K_PERIOD, # Usa o K do config, não mais o visual
         k_smooth=config.STOCH_K_SMOOTH,
-        d_smooth=3 # Usa o D=3 que estava implícito na lógica anterior
+        d_smooth=config.STOCH_D_SMOOTH
+    ).add_indicator(
+        'system_tpm', 
+        indicator_names=['obtr', 'wad'], 
+        period=config.SYSTEM_PERIOD
+    ).add_indicator(
+        'wwma',
+        period=200
+    ).add_indicator(
+        'volatility',
+        period=21 # Período padrão de mercado
+    ).add_indicator(
+        'hurst',
+        window=config.HURST_WINDOW,
+        kind='price'
+    ).add_indicator(
+        'entropy',
+        window=config.ENTROPY_WINDOW
     )
-    df = engine.get_data()
-
-    # 2. Manter cálculo manual para indicadores "especiais" por enquanto
-    print("🔬 Calculando indicadores especiais (Hurst, Entropia, Half-Life)...")
-    hurst = calculate_rolling_hurst(df['close'], window=HURST_WINDOW_VISUAL, kind='returns')
-    df = safe_join(df, pd.DataFrame(hurst))
     
-    entropy_col = IndicatorNames.entropy(ENTROPY_WINDOW_VISUAL)
-    entropy_series = calculate_rolling_entropy(df['close'], window=ENTROPY_WINDOW_VISUAL)
-    df[entropy_col] = entropy_series
-
-    ou_stats = calculate_rolling_ou_params(df['close'], window=HALFLIFE_WINDOW_VISUAL)
-    df = safe_join(df, ou_stats)
-    # --- FIM DA ARQUITETURA REATORADA ---
-
+    # Adicionando Z-Scores que a estratégia 'rules' usa
+    engine.add_zscore('hurst', window=config.HURST_WINDOW, kind='price')
+    engine.add_zscore('entropy', window=config.ENTROPY_WINDOW)
+    
+    df = engine.get_data() # Pega o DF final com TODOS os indicadores
     print("✅ Indicadores calculados.")
 
-    # --- REPLICAÇÃO DA LÓGICA DE BACKTEST (Mesma do run_backtest.py) ---
-    hurst_col_name = IndicatorNames.hurst(HURST_WINDOW_VISUAL, 'returns')
-    halflife_col_name = IndicatorNames.half_life(HALFLIFE_WINDOW_VISUAL)
-    stoch_col_name = IndicatorNames.stochastic_k(STOCH_K_VISUAL, config.STOCH_K_SMOOTH)
-    bb_lower_squeeze = IndicatorNames.bollinger_lower(config.BB_PERIOD, 0.45)
-    bb_upper_squeeze = IndicatorNames.bollinger_upper(config.BB_PERIOD, 0.45)
-    bb_middle = IndicatorNames.bollinger_middle(config.BB_PERIOD)
-    bb_lower_exit = IndicatorNames.bollinger_lower(config.BB_PERIOD, 2.0)
-    bb_upper_exit = IndicatorNames.bollinger_upper(config.BB_PERIOD, 2.0)
 
-    # 1. Filtros de Regime
-    regime_ok = (
-        (df[hurst_col_name] >= 0.53) & 
-        (df[entropy_col] <= 3.2) &
-        (df[halflife_col_name] >= 15)
-    )
-    
-    # 2. Sinais de Compra (Long)
-    zona_compra = (df['close'] >= df[bb_lower_squeeze]) & (df['close'] <= df[bb_upper_squeeze])
-    stoch_compra = df[stoch_col_name] < 30
-    entries = regime_ok & zona_compra & stoch_compra
+    # --- LÓGICA DE BACKTEST CENTRALIZADA (STRATEGY PATTERN) ---
+    print(f"🔌 Carregando a estratégia '{config.ACTIVE_STRATEGY}'...")
+    check_rules = load_strategy(mode='vectorized')
 
-    # 3. Sinais de Venda (Short)
-    zona_venda = (df['close'] >= df[bb_lower_squeeze]) & (df['close'] <= df[bb_middle])
-    stoch_venda = df[stoch_col_name] > 70
-    short_entries = regime_ok & zona_venda & stoch_venda
-    
-    # 4. Saídas (Exits)
-    exits = (df['close'] >= df[bb_upper_exit]) | (~regime_ok)
-    short_exits = (df['close'] <= df[bb_lower_exit]) | (~regime_ok)
+    print("♟️  Executando a lógica da estratégia de forma vetorial...")
+    sinais = check_rules(df)
+
+    entries = sinais.get('entries', pd.Series(False, index=df.index))
+    exits = sinais.get('exits', pd.Series(False, index=df.index))
+    short_entries = sinais.get('short_entries', pd.Series(False, index=df.index))
+    short_exits = sinais.get('short_exits', pd.Series(False, index=df.index))
+
 
     # Limpeza de sinais
     entries = entries.vbt.signals.fshift()
@@ -162,7 +153,7 @@ def executar_visualizacao():
     )
 
     print("\n" + "="*40)
-    print(f" RESULTADO BACKTEST: {ATIVO}")
+    print(f" RESULTADO BACKTEST: {ATIVO} com Estratégia: {config.ACTIVE_STRATEGY}")
     print("="*40)
     print(f"Retorno Total: {pf.total_return():.2%}")
     print(f"Win Rate:      {pf.trades.win_rate():.2%}")
@@ -171,7 +162,31 @@ def executar_visualizacao():
     print("="*40)
     print("👉 Abrindo gráfico no navegador...")
 
-    fig = pf.plot(subplots=['orders', 'cum_returns'])
+    # Plota o gráfico, mas adiciona os indicadores-chave da estratégia para visualização
+    fig = pf.plot(subplots=[
+        ('price', dict(
+            title=f"{ATIVO} - Estratégia: {config.ACTIVE_STRATEGY}",
+            yaxis_title='Preço'
+        )),
+        ('orders', dict(
+            title='Ordens de Compra e Venda'
+        )),
+        (IndicatorNames.stochastic_k(config.STOCH_K_PERIOD, config.STOCH_K_SMOOTH), dict(
+            title='Estocástico',
+            yaxis_title='Valor'
+        )),
+        ('cum_returns', dict(
+            title='Retorno Acumulado',
+            yaxis_title='Percentual (%)'
+        ))
+    ])
+    
+    # Adiciona as bandas de bollinger ao gráfico de preço
+    bb_upper_exit = IndicatorNames.bollinger_upper(config.BB_PERIOD, 2.0)
+    bb_lower_exit = IndicatorNames.bollinger_lower(config.BB_PERIOD, 2.0)
+    fig.add_scatter(y=df[bb_upper_exit], name='BB Upper (Exit)', row=1, col=1)
+    fig.add_scatter(y=df[bb_lower_exit], name='BB Lower (Exit)', row=1, col=1)
+
     fig.show()
 
 if __name__ == "__main__":
