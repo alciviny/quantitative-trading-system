@@ -1,7 +1,7 @@
 import pandas as pd
 from co_piloto_quant.indicators.names import IndicatorNames
 
-def ww_moving_average(data: pd.DataFrame, column: str = 'close', period: int = 200) -> pd.Series:
+def ww_moving_average(data: pd.DataFrame, column: str = 'close', period: int = 200) -> pd.DataFrame:
     """
     Calcula a Média Móvel de Welles Wilder (Wilder's Moving Average).
 
@@ -13,7 +13,7 @@ def ww_moving_average(data: pd.DataFrame, column: str = 'close', period: int = 2
         period (int, optional): O período da média móvel. Defaults to 200.
 
     Returns:
-        pd.Series: Uma série contendo a WWMA.
+        pd.DataFrame: Um DataFrame contendo a WWMA.
 
     Raises:
         ValueError: Se a coluna especificada não for encontrada.
@@ -28,4 +28,4 @@ def ww_moving_average(data: pd.DataFrame, column: str = 'close', period: int = 2
     column_name = IndicatorNames.wwma(period)
     wwma_series.name = column_name
 
-    return wwma_series
+    return wwma_series.to_frame()

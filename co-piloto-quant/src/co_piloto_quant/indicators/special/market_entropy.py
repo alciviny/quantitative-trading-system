@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from co_piloto_quant.indicators.names import IndicatorNames
 
 def calculate_rolling_entropy(close_prices: pd.Series, window: int = 20, bins: int = 10) -> pd.Series:
     """
@@ -50,4 +51,6 @@ def calculate_rolling_entropy(close_prices: pd.Series, window: int = 20, bins: i
         return entropy_val
 
     # Aplicação rolante com raw=True para performance máxima
-    return returns.rolling(window=window).apply(get_shannon_entropy, raw=True)
+    entropy_series = returns.rolling(window=window).apply(get_shannon_entropy, raw=True)
+    entropy_series.name = IndicatorNames.entropy(window)
+    return entropy_series

@@ -34,7 +34,7 @@ def bollinger_bands(data: pd.DataFrame, column: str = 'close', period: int = 200
         raise ValueError(f"A validação dos dados de entrada falhou para a coluna '{column}'. Verifique se a coluna existe e contém dados numéricos. Erro original: {e}")
 
     
-    middle_band = ww_moving_average(data, column=column, period=period)
+    middle_band = ww_moving_average(data, column=column, period=period).squeeze(axis=1)
     
    
     squared_diff = (data[column] - middle_band)**2

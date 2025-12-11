@@ -21,7 +21,7 @@ from co_piloto_quant import config
 from co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
 from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
 from co_piloto_quant.indicators.special.half_life import calculate_rolling_ou_params
-from co_piloto_quant.utils.math_tools import safe_join
+from co_piloto_quant.utils.math_tools import safe_join, calculate_z_score
 from co_piloto_quant.indicators.names import IndicatorNames
 from co_piloto_quant.strategies.loader import load_strategy
 
@@ -91,12 +91,19 @@ def executar_visualizacao():
         k_smooth=config.STOCH_K_SMOOTH,
         d_smooth=config.STOCH_D_SMOOTH
     ).add_indicator(
-        'system_tpm', 
-        indicator_names=['obtr', 'wad'], 
+        'system_tpm',
+        indicator='obtr',
+        period=config.SYSTEM_PERIOD
+    ).add_indicator(
+        'system_tpm',
+        indicator='wad',
         period=config.SYSTEM_PERIOD
     ).add_indicator(
         'wwma',
         period=200
+    ).add_indicator(
+        'wwma',
+        period=20
     ).add_indicator(
         'volatility',
         period=21 # Período padrão de mercado
@@ -109,12 +116,33 @@ def executar_visualizacao():
         window=config.ENTROPY_WINDOW
     )
     
-    # Adicionando Z-Scores que a estratégia 'rules' usa
-    engine.add_zscore('hurst', window=config.HURST_WINDOW, kind='price')
-    engine.add_zscore('entropy', window=config.ENTROPY_WINDOW)
-    
     df = engine.get_data() # Pega o DF final com TODOS os indicadores
     print("✅ Indicadores calculados.")
+
+
+    print("🧮  Calculando Z-Scores...")
+    # O cálculo do Z-Score foi movido para fora do IndicatorEngine
+    
+    # Nomes das colunas originais
+    hurst_col = IndicatorNames.hurst(config.HURST_WINDOW, kind='price')
+    entropy_col = IndicatorNames.entropy(config.ENTROPY_WINDOW)
+    
+    # Nomes das novas colunas de Z-Score
+    hurst_z_col = IndicatorNames.hurst_z(config.HURST_WINDOW, kind='price')
+    entropy_z_col = IndicatorNames.entropy_z(config.ENTROPY_WINDOW)
+
+    if hurst_col in df.columns:
+        df[hurst_z_col] = calculate_z_score(df[hurst_col], window=config.HURST_WINDOW)
+        print(f"  -> Z-Score para '{hurst_col}' calculado em '{hurst_z_col}'.")
+    else:
+        print(f"  ⚠️  Aviso: Coluna '{hurst_col}' não encontrada para calcular Z-Score.")
+
+    if entropy_col in df.columns:
+        df[entropy_z_col] = calculate_z_score(df[entropy_col], window=config.ENTROPY_WINDOW)
+        print(f"  -> Z-Score para '{entropy_col}' calculado em '{entropy_z_col}'.")
+    else:
+        print(f"  ⚠️  Aviso: Coluna '{entropy_col}' não encontrada para calcular Z-Score.")
+    print("✅ Z-Scores calculados.")
 
 
     # --- LÓGICA DE BACKTEST CENTRALIZADA (STRATEGY PATTERN) ---
