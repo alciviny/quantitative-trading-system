@@ -6,17 +6,37 @@ import os
 import plotly.io as pio
 
 # --- CONFIGURAÇÃO DE AMBIENTE ---
-# Isso faz o gráfico abrir no navegador padrão
 pio.renderers.default = "browser"
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.co_piloto_quant.analysis import calculate_indicators
+# Adiciona o diretório src ao path para permitir importações do projeto
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+src_path = os.path.join(project_root, 'src')
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+
+
+# --- NOVAS IMPORTAÇÕES ---
+from co_piloto_quant.data.indicator_engine import IndicatorEngine
+from co_piloto_quant import config
+from co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
+from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
+from co_piloto_quant.indicators.special.half_life import calculate_rolling_ou_params
+from co_piloto_quant.utils.math_tools import safe_join
+from co_piloto_quant.indicators.names import IndicatorNames
+
 
 # --- PARÂMETROS ---
-ATIVO = "EURUSD"       # Qual ativo testar (Tem que estar no Market Watch do MT5)
-TIMEFRAME = mt5.TIMEFRAME_H1 # Timeframe (H1, M15, D1)
-BARRAS = 5000          # Quantidade de candles para voltar no tempo
+ATIVO = "EURUSD"
+TIMEFRAME = mt5.TIMEFRAME_H1
+BARRAS = 5000
 SALDO_INICIAL = 10000
+
+# Parâmetros específicos da lógica de visualização
+STOCH_K_VISUAL = 80
+HURST_WINDOW_VISUAL = 72
+ENTROPY_WINDOW_VISUAL = 20
+HALFLIFE_WINDOW_VISUAL = 60
+
 
 def conectar_mt5():
     if not mt5.initialize():
@@ -33,23 +53,15 @@ def buscar_dados_mt5(symbol, timeframe, n_barras):
     df = pd.DataFrame(rates)
     df['time'] = pd.to_datetime(df['time'], unit='s')
     df.set_index('time', inplace=True)
-    
-    # Padronizar nomes para minúsculo (close, open, high, low)
     df.rename(columns={'tick_volume': 'volume'}, inplace=True)
     return df
 
 def get_pandas_freq(mt5_timeframe):
     """Converte o timeframe do MT5 para uma string de frequência do Pandas."""
     freq_map = {
-        mt5.TIMEFRAME_M1: "1T",
-        mt5.TIMEFRAME_M5: "5T",
-        mt5.TIMEFRAME_M15: "15T",
-        mt5.TIMEFRAME_M30: "30T",
-        mt5.TIMEFRAME_H1: "H",
-        mt5.TIMEFRAME_H4: "4H",
-        mt5.TIMEFRAME_D1: "D",
-        mt5.TIMEFRAME_W1: "W",
-        mt5.TIMEFRAME_MN1: "M",
+        mt5.TIMEFRAME_M1: "1T", mt5.TIMEFRAME_M5: "5T", mt5.TIMEFRAME_M15: "15T",
+        mt5.TIMEFRAME_M30: "30T", mt5.TIMEFRAME_H1: "h", mt5.TIMEFRAME_H4: "4h",
+        mt5.TIMEFRAME_D1: "d", mt5.TIMEFRAME_W1: "W", mt5.TIMEFRAME_MN1: "M",
     }
     return freq_map.get(mt5_timeframe)
 
@@ -60,40 +72,74 @@ def executar_visualizacao():
     print(f"📥 Baixando {BARRAS} candles de {ATIVO} do MT5...")
     df = buscar_dados_mt5(ATIVO, TIMEFRAME, BARRAS)
     
-    if df.empty:
-        print("❌ Nenhum dado encontrado. Verifique se o ativo está na Observação de Mercado.")
+    if df.empty or len(df) < 200:
+        print("❌ Nenhum dado encontrado ou dados insuficientes. Verifique se o ativo está na Observação de Mercado.")
         return
 
-    print("🧮 Calculando Indicadores e Sinais (Hurst, Entropia, BB)...")
-    # Calcula todos os indicadores (pode demorar um pouco dependendo do PC)
-    df = calculate_indicators(df)
+    print("🧮  Calculando Indicadores com a nova arquitetura...")
     
+    # --- ARQUITETURA REATORADA ---
+    # 1. Usar o IndicatorEngine para indicadores padrão
+    engine = IndicatorEngine(df)
+    engine.add_indicator(
+        'bollinger_bands', 
+        period=config.BB_PERIOD, 
+        std_devs=config.PRICE_BB_DEVIATIONS # Usa a lista completa do config
+    ).add_indicator(
+        'stochastic',
+        k_period=STOCH_K_VISUAL, # Usa o período específico da visualização (80)
+        k_smooth=config.STOCH_K_SMOOTH,
+        d_smooth=3 # Usa o D=3 que estava implícito na lógica anterior
+    )
+    df = engine.get_data()
+
+    # 2. Manter cálculo manual para indicadores "especiais" por enquanto
+    print("🔬 Calculando indicadores especiais (Hurst, Entropia, Half-Life)...")
+    hurst = calculate_rolling_hurst(df['close'], window=HURST_WINDOW_VISUAL, kind='returns')
+    df = safe_join(df, pd.DataFrame(hurst))
+    
+    entropy_col = IndicatorNames.entropy(ENTROPY_WINDOW_VISUAL)
+    entropy_series = calculate_rolling_entropy(df['close'], window=ENTROPY_WINDOW_VISUAL)
+    df[entropy_col] = entropy_series
+
+    ou_stats = calculate_rolling_ou_params(df['close'], window=HALFLIFE_WINDOW_VISUAL)
+    df = safe_join(df, ou_stats)
+    # --- FIM DA ARQUITETURA REATORADA ---
+
+    print("✅ Indicadores calculados.")
+
     # --- REPLICAÇÃO DA LÓGICA DE BACKTEST (Mesma do run_backtest.py) ---
-    # Aqui aplicamos as regras de forma vetorizada para o gráfico
-    
+    hurst_col_name = IndicatorNames.hurst(HURST_WINDOW_VISUAL, 'returns')
+    halflife_col_name = IndicatorNames.half_life(HALFLIFE_WINDOW_VISUAL)
+    stoch_col_name = IndicatorNames.stochastic_k(STOCH_K_VISUAL, config.STOCH_K_SMOOTH)
+    bb_lower_squeeze = IndicatorNames.bollinger_lower(config.BB_PERIOD, 0.45)
+    bb_upper_squeeze = IndicatorNames.bollinger_upper(config.BB_PERIOD, 0.45)
+    bb_middle = IndicatorNames.bollinger_middle(config.BB_PERIOD)
+    bb_lower_exit = IndicatorNames.bollinger_lower(config.BB_PERIOD, 2.0)
+    bb_upper_exit = IndicatorNames.bollinger_upper(config.BB_PERIOD, 2.0)
+
     # 1. Filtros de Regime
     regime_ok = (
-        (df['Hurst_72_returns'] >= 0.53) & 
-        (df['Entropy_20'] <= 3.2) &
-        (df['HalfLife_60'] >= 15)
+        (df[hurst_col_name] >= 0.53) & 
+        (df[entropy_col] <= 3.2) &
+        (df[halflife_col_name] >= 15)
     )
     
     # 2. Sinais de Compra (Long)
-    zona_compra = (df['close'] >= df['BB_Lower_200_0.45']) & (df['close'] <= df['BB_Upper_200_0.45'])
-    stoch_compra = df['stoch_k_80_3'] < 30
+    zona_compra = (df['close'] >= df[bb_lower_squeeze]) & (df['close'] <= df[bb_upper_squeeze])
+    stoch_compra = df[stoch_col_name] < 30
     entries = regime_ok & zona_compra & stoch_compra
 
-    # 3. Sinais de Venda (Short) - Opcional, se quiser ver só Long comente isso
-    zona_venda = (df['close'] >= df['BB_Lower_200_0.45']) & (df['close'] <= df['BB_Middle_200'])
-    stoch_venda = df['stoch_k_80_3'] > 70
+    # 3. Sinais de Venda (Short)
+    zona_venda = (df['close'] >= df[bb_lower_squeeze]) & (df['close'] <= df[bb_middle])
+    stoch_venda = df[stoch_col_name] > 70
     short_entries = regime_ok & zona_venda & stoch_venda
     
     # 4. Saídas (Exits)
-    # Sai se tocar na banda oposta ou se o regime ficar ruim
-    exits = (df['close'] >= df['BB_Upper_200_2.0']) | (~regime_ok)
-    short_exits = (df['close'] <= df['BB_Lower_200_2.0']) | (~regime_ok)
+    exits = (df['close'] >= df[bb_upper_exit]) | (~regime_ok)
+    short_exits = (df['close'] <= df[bb_lower_exit]) | (~regime_ok)
 
-    # Limpeza de sinais (Shift para não operar no futuro)
+    # Limpeza de sinais
     entries = entries.vbt.signals.fshift()
     exits = exits.vbt.signals.fshift()
     short_entries = short_entries.vbt.signals.fshift()
@@ -101,25 +147,20 @@ def executar_visualizacao():
 
     print("📊 Gerando Gráfico Interativo...")
     
-    # Converte o timeframe do MT5 para a frequência do Pandas para o cálculo do Sharpe Ratio
     freq_str = get_pandas_freq(TIMEFRAME)
     if freq_str is None:
-        print(f"⚠️  Aviso: Timeframe {TIMEFRAME} não mapeado. O Sharpe Ratio pode falhar.")
+        print(f"⚠️  Aviso: Timeframe {TIMEFRAME} não mapeado para frequência Pandas. Sharpe Ratio pode falhar.")
 
-    # Cria o Portfólio VectorBT
     pf = vbt.Portfolio.from_signals(
         df['close'], 
-        entries=entries, 
-        exits=exits, 
-        short_entries=short_entries, 
-        short_exits=short_exits,
+        entries=entries, exits=exits, 
+        short_entries=short_entries, short_exits=short_exits,
         freq=freq_str,
         init_cash=SALDO_INICIAL,
-        fees=0.0006, # Taxas estimadas
-        slippage=0.001 # Slippage estimado
+        fees=0.0006,
+        slippage=0.001
     )
 
-    # Mostra Estatísticas no Terminal
     print("\n" + "="*40)
     print(f" RESULTADO BACKTEST: {ATIVO}")
     print("="*40)
@@ -130,9 +171,6 @@ def executar_visualizacao():
     print("="*40)
     print("👉 Abrindo gráfico no navegador...")
 
-    # Plota o gráfico completo
-    # O subplot 'orders' mostra setas de compra/venda
-    # O subplot 'trade_pnl' mostra lucro/prejuízo
     fig = pf.plot(subplots=['orders', 'cum_returns'])
     fig.show()
 

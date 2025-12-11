@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+from co_piloto_quant.indicators.names import IndicatorNames
+
 def on_balance_true_range(data: pd.DataFrame) -> pd.DataFrame:
     """
     Calcula o On-Balance True Range (OBTR).
@@ -12,7 +14,7 @@ def on_balance_true_range(data: pd.DataFrame) -> pd.DataFrame:
         data: DataFrame com colunas 'High', 'Low', 'Close'
         
     Returns:
-        DataFrame com coluna 'OBTR'
+        DataFrame com coluna 'obtr'
         
     Raises:
         ValueError: Se colunas necessárias não existirem
@@ -38,6 +40,7 @@ def on_balance_true_range(data: pd.DataFrame) -> pd.DataFrame:
 
    
     obtr = (tr * price_direction).cumsum()
+    obtr.name = IndicatorNames.obtr()
 
-    return pd.DataFrame({'obtr': obtr}, index=data.index)
+    return obtr.to_frame()
 calculate_obtr = on_balance_true_range

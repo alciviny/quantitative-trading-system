@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+from co_piloto_quant.indicators.names import IndicatorNames
+
 def williams_ad(data: pd.DataFrame, smooth_period: int = None) -> pd.Series:
     """
     Calcula o indicador Williams Accumulation/Distribution (A/D).
@@ -48,11 +50,13 @@ def williams_ad(data: pd.DataFrame, smooth_period: int = None) -> pd.Series:
 
     # Converte qualquer NaN para 0 antes da soma cumulativa para evitar a propagação de NaN
     ad_today = np.nan_to_num(price_change, nan=0.0)
-    williams_ad_series = pd.Series(ad_today.cumsum(), index=data.index, name='wad')
+    williams_ad_series = pd.Series(ad_today.cumsum(), index=data.index, name=IndicatorNames.wad())
 
     if smooth_period is not None:
+        # A suavização é aplicada, mas o nome da coluna permanece o padrão 'wad'
+        # para consistência. A lógica que chama com 'smooth_period' deve estar ciente disso.
         wilder_smooth = williams_ad_series.ewm(alpha=1/smooth_period, adjust=False).mean()
-        wilder_smooth.name = f'wad_wilder_{smooth_period}'
+        wilder_smooth.name = IndicatorNames.wad()
         return wilder_smooth
     
     return williams_ad_series

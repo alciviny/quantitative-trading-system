@@ -1,118 +1,80 @@
-"""
-Módulo de Processamento de Dados.
-Atua como uma "calculadora pura" em memória, sincronizada com a estratégia.
-"""
-
 import pandas as pd
-import logging
-from typing import Dict, Any, Callable
+from typing import List
 
-# --- IMPORTAÇÕES DOS INDICADORES ---
-from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
-from co_piloto_quant.indicators.ifr_tpm import calculate_ifr_tpm
-from co_piloto_quant.indicators.stochastic_custom import calculate_stochastic_custom
-from co_piloto_quant.indicators.system_tpm import calculate_system_tpm
-from co_piloto_quant.indicators.ww_moving_average import ww_moving_average
+from co_piloto_quant.data.indicator_engine import IndicatorEngine
+from co_piloto_quant import config
 
-# Importa as configurações para garantir consistência
-from co_piloto_quant.config import (
-    BB_PERIOD, 
-    PRICE_BB_DEVIATIONS, 
-    IFR_PERIOD,
-    SYSTEM_PERIOD
-)
+def process_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Processes the raw price data to add all required technical indicators.
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    Args:
+        df (pd.DataFrame): The raw DataFrame with OHLCV data.
 
-# --- Mapeamento Sincronizado com a Estratégia ---
-INDICATOR_MAPPING: Dict[str, Dict[str, Any]] = {
-    "bollinger_bands": {
-        "function": bollinger_bands,
-        "params": {
-            "period": BB_PERIOD, 
-            "std_devs": PRICE_BB_DEVIATIONS 
-        }
-    },
-    "ifr_tpm": {
-        "function": calculate_ifr_tpm,
-        "params": {"period": IFR_PERIOD}
-    },
-    "stochastic_custom": {
-        "function": calculate_stochastic_custom,
-        "params": {} 
-    },
-    "system_tpm_obtr": {
-        "function": calculate_system_tpm,
-        "params": {"indicator": "obtr", "period": SYSTEM_PERIOD}
-    },
-    "system_tpm_wad": {
-        "function": calculate_system_tpm,
-        "params": {"indicator": "wad", "period": SYSTEM_PERIOD}
-    },
-    "ww_moving_average": {
-        "function": ww_moving_average,
-        "params": {"period": 200}
-    },
-}
+    Returns:
+        pd.DataFrame: The DataFrame enriched with indicator data.
+    """
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("Input must be a pandas DataFrame.")
 
-def process_data(data: pd.DataFrame, ticker: str = None) -> pd.DataFrame:
-    """Aplica indicadores técnicos ao DataFrame em memória."""
-    if not isinstance(data.index, pd.DatetimeIndex):
-        raise ValueError("O índice do DataFrame deve ser DatetimeIndex.")
+    # Instantiate the engine with the raw data
+    engine = IndicatorEngine(df)
 
-    if data.empty:
-        logging.warning(f"DataFrame vazio para '{ticker}'.")
-        return data
-
-    processed_data = data.copy()
-    processed_data.columns = processed_data.columns.str.lower()
+    # Add indicators using the new engine and settings from config
+    # The method chaining is possible thanks to the engine design
+    engine.add_indicator(
+        'bollinger_bands', 
+        period=config.BB_PERIOD, 
+        std_devs=config.PRICE_BB_DEVIATIONS
+    ).add_indicator(
+        'ifr',
+        period=config.IFR_PERIOD
+    ).add_indicator(
+        'system_tpm',
+        period=config.SYSTEM_PERIOD,
+        deviations=config.SYSTEM_DEVIATIONS
+    ).add_indicator(
+        'stochastic',
+        k_period=config.STOCH_K_PERIOD,
+        k_smooth=config.STOCH_K_SMOOTH,
+        d_smooth=config.STOCH_D_SMOOTH
+    )
     
-    # --- LIMPEZA CRÍTICA (CORREÇÃO DA ESTICADA) ---
-    # 1. Remove NaNs iniciais
-    processed_data.dropna(inplace=True)
+    # We could add more indicators here in the future easily
+    # Example:
+    # .add_indicator('ww_ma', period=50)
+
+    # Get the final DataFrame with all indicators
+    processed_df = engine.get_data()
+
+    return processed_df
+
+if __name__ == '__main__':
+    # Example Usage (demonstration purposes) 
+    # This block will only run if the script is executed directly
     
-    # 2. Remove preços zerados ou negativos (Bug comum do yfinance no último candle)
-    # Isso evita que o gráfico desenhe uma linha até o zero.
-    cols_to_check = ['open', 'high', 'low', 'close']
-    for col in cols_to_check:
-        if col in processed_data.columns:
-            processed_data = processed_data[processed_data[col] > 0]
-            
-    # ---------------------------------------------
+    # Create a sample DataFrame 
+    # In a real scenario, this data would be loaded from a file or an API
+    sample_data = {
+        'open': [100, 102, 101, 103, 105, 104, 106, 108, 107, 110],
+        'high': [103, 104, 103, 105, 106, 106, 109, 110, 110, 112],
+        'low': [99, 101, 100, 102, 104, 103, 105, 107, 106, 109],
+        'close': [102, 103, 102, 104, 105, 105, 108, 109, 109, 111],
+        'volume': [1000, 1500, 1200, 1800, 2000, 1700, 2200, 2500, 2300, 2800]
+    }
+    # Create a date index for the sample data
+    index = pd.to_datetime(pd.date_range(start='2023-01-01', periods=10, freq='D'))
+    sample_df = pd.DataFrame(sample_data, index=index)
     
-    # Calcula retorno diário
-    if 'close' in processed_data.columns:
-        processed_data['daily_return'] = processed_data['close'].pct_change()
-        # Remove a primeira linha que fica NaN após o cálculo do retorno
-        processed_data.dropna(subset=['daily_return'], inplace=True)
-
-    if processed_data.empty:
-        return processed_data
-
-    log_ticker = f" [{ticker}]" if ticker else ""
-    logging.info(f"Processando indicadores{log_ticker}...")
-
-    for name, config in INDICATOR_MAPPING.items():
-        try:
-            func: Callable = config["function"]
-            params: Dict = config["params"]
-            
-            result = func(processed_data, **params)
-            
-            if isinstance(result, pd.DataFrame):
-                cols_to_use = result.columns.difference(processed_data.columns)
-                processed_data = processed_data.join(result[cols_to_use])
-            elif isinstance(result, pd.Series):
-                processed_data[result.name] = result
-
-            logging.info(f"Indicador '{name}' calculado.")
-
-        except Exception as e:
-            logging.error(f"Erro no indicador '{name}'{log_ticker}: {e}")
-            continue
-
-    # Limpeza Final: Remove linhas que ficaram com NaN por causa do período dos indicadores
-    # (Ex: As primeiras 200 linhas costumam ficar vazias por causa da Média Móvel 200)
-    processed_data.dropna(inplace=True)
-
-    return processed_data
+    print("--- Original DataFrame ---")
+    print(sample_df.head())
+    print("\n" + "="*50 + "\n")
+    
+    # Process the data to add indicators
+    enriched_df = process_data(sample_df)
+    
+    print("--- Enriched DataFrame ---")
+    # Displaying only the last few rows and all columns to see the indicator values
+    print(enriched_df.tail()) 
+    print("\nColumns added:")
+    print(set(enriched_df.columns) - set(sample_df.columns))
