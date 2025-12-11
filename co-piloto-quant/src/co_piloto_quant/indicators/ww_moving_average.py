@@ -1,4 +1,5 @@
 import pandas as pd
+from co_piloto_quant.indicators.names import IndicatorNames
 
 def ww_moving_average(data: pd.DataFrame, column: str = 'close', period: int = 200) -> pd.Series:
     """
@@ -12,7 +13,7 @@ def ww_moving_average(data: pd.DataFrame, column: str = 'close', period: int = 2
         period (int, optional): O período da média móvel. Defaults to 200.
 
     Returns:
-        pd.Series: Uma série contendo os valores da média móvel.
+        pd.Series: Uma série contendo a WWMA.
 
     Raises:
         ValueError: Se a coluna especificada não for encontrada.
@@ -21,7 +22,10 @@ def ww_moving_average(data: pd.DataFrame, column: str = 'close', period: int = 2
         raise ValueError(f"Column '{column}' not found in the input DataFrame. Found: {data.columns.tolist()}")
 
     
-    wwma = data[column].ewm(alpha=1/period, adjust=False).mean()
-    wwma.name = f'WWMA_{period}'
+    wwma_series = data[column].ewm(alpha=1/period, adjust=False).mean()
+    
+    # Usa IndicatorNames para definir o nome da coluna
+    column_name = IndicatorNames.wwma(period)
+    wwma_series.name = column_name
 
-    return wwma
+    return wwma_series

@@ -125,20 +125,20 @@ def calculate_rolling_ou_params(
     out = pd.DataFrame(index=series.index)
     suffix = f"_{window}"
     
-    out[f'Beta{suffix}'] = beta
-    out[f'HalfLife{suffix}'] = hl
-    out[f'R2{suffix}'] = r2
-    out[f't_Beta{suffix}'] = t_beta
-    out[f'SigmaResid{suffix}'] = sigma_resid
+    out[f'beta{suffix}'] = beta
+    out[f'half_life{suffix}'] = hl
+    out[f'r2{suffix}'] = r2
+    out[f't_beta{suffix}'] = t_beta
+    out[f'sigma_resid{suffix}'] = sigma_resid
     # Adicionei Mu e Alpha se quiser usar depois, mas os principais estão acima
     
     # Non-reverting regimes handling
     non_reverting = (beta >= 0) | (~np.isfinite(beta))
 
     if strict_mode:
-        out.loc[non_reverting, f'HalfLife{suffix}'] = np.nan
+        out.loc[non_reverting, f'half_life{suffix}'] = np.nan
     else:
-        out.loc[non_reverting, f'HalfLife{suffix}'] = visual_clip
+        out.loc[non_reverting, f'half_life{suffix}'] = visual_clip
 
     # Clean extremes
     out.replace([np.inf, -np.inf], np.nan, inplace=True)

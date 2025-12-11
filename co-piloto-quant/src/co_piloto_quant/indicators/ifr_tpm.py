@@ -1,6 +1,8 @@
 import pandas as pd
 import pandas_ta as ta
 
+from co_piloto_quant.indicators.names import IndicatorNames
+
 def calculate_ifr_tpm(data: pd.DataFrame, column: str = 'close', period: int = 120) -> pd.DataFrame:
     """
     Calcula o IFR (Índice de Força Relativa) com sanitização de dados para robustez.
@@ -21,9 +23,19 @@ def calculate_ifr_tpm(data: pd.DataFrame, column: str = 'close', period: int = 1
 
     # Calcula o RSI usando a série sanitizada
     ifr_series = ta.rsi(close=series_input, length=period)
+
+    # --- CORREÇÃO DE ROBUSTEZ ADICIONAL: Lidar com output Nulo ---
+    # Se pandas_ta não puder calcular (e.g., dados insuficientes), ele pode retornar None.
+    # Usa IndicatorNames para nomear a coluna.
+    column_name = IndicatorNames.rsi(period)
+    if ifr_series is None:
+        ifr_series = pd.Series(index=data.index, dtype=float, name=column_name)
+    else:
+        ifr_series.name = column_name
     
-    # Cria o DataFrame de resultado
-    result_df = pd.DataFrame({f'IFR_{period}': ifr_series, 'IFR_50': 50})
+    # Cria o DataFrame de resultado a partir da série (que agora garantidamente tem um índice)
+    result_df = pd.DataFrame(ifr_series)
+    result_df['IFR_50'] = 50 # Mantido para fins de visualização/compatibilidade
 
     # --- CORREÇÃO DE ROBUSTEZ 3: Reindexação ---
     # Garante que o output tenha o mesmo índice que o input original, preenchendo NaNs onde necessário
