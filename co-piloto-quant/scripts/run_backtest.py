@@ -24,12 +24,57 @@ BB_EXIT_STD_DEV = 2.0
 INITIAL_CAPITAL = 100000
 FEES_PCT = 0.0006
 OUTPUT_DIR = "data/reports"
+DEEP_LOG_DIR = "data/strategy_logs"
+
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 warnings.filterwarnings('ignore')
+
+
+# ===================== DEEP LOGGING FUNCTION =====================
+
+def save_deep_log(ticker: str, df_raw: pd.DataFrame, entries_series: pd.Series, exits_series: pd.Series, best_bb: float, best_vol: float):
+    """
+    Salva um log detalhado (snapshot) do melhor cenário para análise de ML.
+    """
+    try:
+        log_df = df_raw.copy()
+
+        # 1. Recalcular 'feat_regime_ratio'
+        ret = log_df['close'].pct_change()
+        vol_fast = ret.rolling(10).std()
+        vol_slow = ret.rolling(60).std()
+        log_df['feat_regime_ratio'] = vol_fast / (vol_slow + 1e-6)
+
+        # 2. Recalcular 'feat_stoch_weight'
+        stoch_k_series = vbt.STOCH.run(
+            log_df['high'],
+            log_df['low'],
+            log_df['close'],
+            k_window=STOCH_K_PERIOD,
+            d_window=STOCH_K_SMOOTH
+        ).percent_k
+        log_df['feat_stoch_weight'] = np.clip((30 - stoch_k_series) / 30, 0, 1)
+
+        # 3. Adicionar parâmetros e sinais
+        log_df['param_bb_std'] = best_bb
+        log_df['param_vol_threshold'] = best_vol
+        log_df['signal_entry'] = entries_series
+        log_df['signal_exit'] = exits_series
+
+        # 4. Persistência
+        os.makedirs(DEEP_LOG_DIR, exist_ok=True)
+        log_path = os.path.join(DEEP_LOG_DIR, f"{ticker}_best_scenario.parquet")
+        
+        # Manter colunas originais + novas features
+        log_df.to_parquet(log_path, compression='snappy', index=True)
+        # logger.info(f"Deep log salvo para {ticker} em {log_path}")
+
+    except Exception as e:
+        logger.error(f"Falha ao salvar deep log para {ticker}: {e}")
 
 
 # ===================== CORE FUNCTION =====================
@@ -52,7 +97,9 @@ def run_matrix_optimization(ticker: str):
     # A lógica complexa de sinais foi movida para o "cérebro" da estratégia.
     # Este script apenas consome a função, passando os parâmetros.
     entries_2d, exits_2d = generate_signals_vectorized(
-        price=closes,
+        high=df['high'],
+        low=df['low'],
+        close=closes,
         bb_dev_range=BB_DEV_RANGE,
         vol_max_range=VOL_MAX_RANGE,
         bb_exit_std_dev=BB_EXIT_STD_DEV
@@ -106,6 +153,15 @@ def run_matrix_optimization(ticker: str):
     best_bb = BB_DEV_RANGE[best_idx[0]]
     best_vol = VOL_MAX_RANGE[best_idx[1]]
 
+    # ===================== DEEP LOGGING HOOK =====================
+    # Após encontrar o melhor cenário, salvamos o log detalhado.
+    best_linear_idx = best_idx[0] * n_vol + best_idx[1]
+    best_entries = pd.Series(entries_2d[:, best_linear_idx], index=closes.index)
+    best_exits = pd.Series(exits_2d[:, best_linear_idx], index=closes.index)
+
+    save_deep_log(ticker, df_raw, best_entries, best_exits, best_bb, best_vol)
+    # =============================================================
+
     best_raw_score = robust_matrix[best_idx]
 
     # ===================== ANÁLISE DE ROBUSTEZ =====================
@@ -146,7 +202,7 @@ def process_wrapper(ticker):
     try:
         return run_matrix_optimization(ticker)
     except Exception as e:
-        logger.error(f"{ticker} erro: {e}")
+        logger.error(f"Erro não tratado para {ticker}", exc_info=True)
         return None
 
 
@@ -182,6 +238,8 @@ if __name__ == "__main__":
         out = os.path.join(OUTPUT_DIR, "matrix_regime_robust_ranking.csv")
         df_final.to_csv(out, index=False, float_format="%.4f")
         print(f"\n💾 Relatório salvo em: {out}")
+        print(f"💾 Deep logs salvos em: {DEEP_LOG_DIR}")
+
 
     else:
         print("❌ Nenhum ativo viável.")
