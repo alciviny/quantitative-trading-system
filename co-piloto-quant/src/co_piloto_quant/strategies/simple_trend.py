@@ -1,49 +1,58 @@
 import pandas as pd
-from co_piloto_quant.data.names import IndicatorNames
+from co_piloto_quant.data.indicator_engine import IndicatorEngine # Import para type hinting se necessário
+from co_piloto_quant.indicators.names import IndicatorNames
 
-def check_rules(df: pd.DataFrame) -> str:
+# --- MODO LIVE (Para o Robô operar 1 vela por vez) ---
+def check_rules_live(df: pd.DataFrame) -> dict:
     """
-    Estratégia de exemplo: Simple Trend Follower.
-    - Compra: Se o preço de fechamento cruzar acima da Média Móvel de 20 períodos.
-    - Vende: Se o preço de fechamento cruzar abaixo da Média Móvel de 20 períodos.
-    
-    Args:
-        df (pd.DataFrame): DataFrame com dados de mercado e indicadores. 
-                           Deve conter 'close' e 'SMA_20'.
-                           
-    Returns:
-        str: 'COMPRA', 'VENDA' ou 'NEUTRO'.
+    Retorna decisão para a última vela disponível.
     """
-    # Acessa a última vela (a mais recente)
     latest = df.iloc[-1]
-    
-    # Acessa a penúltima vela para checar o cruzamento
     previous = df.iloc[-2]
-
-    # Nomes das colunas usando IndicatorNames para robustez
-    price_col = 'close' # Usamos o fechamento como referência de preço
-    ma_col = IndicatorNames.SMA(20) # Média Móvel Simples de 20 períodos
-
-    # Verifica se as colunas necessárias existem
-    if price_col not in df.columns or ma_col not in df.columns:
-        # Retorna NEUTRO se o indicador não estiver presente para evitar erros
-        return 'NEUTRO'
-
-    # --- Lógica de Cruzamento ---
     
-    # Cruzamento para CIMA (Compra)
-    # Preço na vela anterior estava ABAIXO da média
-    # Preço na vela atual está ACIMA da média
-    buy_signal = previous[price_col] < previous[ma_col] and latest[price_col] > latest[ma_col]
+    # Nomes padronizados (Certifique-se que o Engine calculou 'ww_ma')
+    # Nota: No script de visualização você adicionou 'wwma', então vamos usar ele
+    price_col = 'close'
+    ma_col = IndicatorNames.wwma(20) # Usando Wilder pois foi o que adicionamos no engine
 
-    # Cruzamento para BAIXO (Venda)
-    # Preço na vela anterior estava ACIMA da média
-    # Preço na vela atual está ABAIXO da média
+    if ma_col not in df.columns:
+        return {'action': 'NEUTRO', 'reason': 'Indicador ausente'}
+
+    # Cruzamento Alta
+    buy_signal = previous[price_col] < previous[ma_col] and latest[price_col] > latest[ma_col]
+    
+    # Cruzamento Baixa
     sell_signal = previous[price_col] > previous[ma_col] and latest[price_col] < latest[ma_col]
 
     if buy_signal:
-        return 'COMPRA'
+        return {'action': 'COMPRA', 'price': latest['close']}
     elif sell_signal:
-        return 'VENDA'
+        return {'action': 'VENDA', 'price': latest['close']}
     
-    return 'NEUTRO'
+    return {'action': 'NEUTRO'}
+
+# --- MODO VETORIZADO (Para o Backtest rápido) ---
+def check_rules_vectorized(df: pd.DataFrame) -> dict:
+    """
+    Retorna Séries booleanas para todo o histórico (VectorBT).
+    """
+    price = df['close']
+    # Assumindo que o Engine calculou e nomeou como 'wwma_20'
+    ma = df[IndicatorNames.wwma(20)]
+    
+    # Lógica Vetorizada (Rápida)
+    # Crossover: Preço cruza acima da média
+    entries = (price > ma) & (price.shift(1) <= ma.shift(1))
+    
+    # Crossunder: Preço cruza abaixo da média
+    exits = (price < ma) & (price.shift(1) >= ma.shift(1))
+    
+    return {
+        'entries': entries,
+        'exits': exits,
+        'short_entries': pd.Series(False, index=df.index), # Sem short nessa
+        'short_exits': pd.Series(False, index=df.index)
+    }
+
+# Fallback genérico
+check_rules = check_rules_live
