@@ -38,6 +38,8 @@ HILBERT_LONG_PERIOD = 20
 HURST_WINDOW = 72
 ENTROPY_WINDOW = 20
 REGIME_STRICTNESS = 'NORMAL' # 'LOOSE', 'NORMAL', 'STRICT'
+HURST_THRESHOLD_TREND = 0.54
+HURST_THRESHOLD_REVERSION = 0.46
 
 # --- 2.1. SELEÇÃO DA ESTRATÉGIA ATIVA ---
 # Define qual arquivo de estratégia dentro da pasta 'strategies' será carregado.
