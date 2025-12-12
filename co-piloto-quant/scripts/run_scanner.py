@@ -5,19 +5,18 @@ import logging
 from tqdm import tqdm
 import concurrent.futures
 import os
-from pathlib import Path
 
-# Imports do Projeto
+# --- NOVAS IMPORTAÇÕES DO PROJETO ---
 from co_piloto_quant.data.recorder import init_recorder_db, record_signal
-from co_piloto_quant.config import PROCESSED_DATA_PATH
 from co_piloto_quant.data.data_fetching import fetch_batch_data
 from co_piloto_quant.data.database import load_price_data
-from co_piloto_quant.utils import get_expanded_universe
-from co_piloto_quant.data.data_processing import process_data
-from co_piloto_quant.analysis import calculate_indicators
+from co_piloto_quant.universe import get_expanded_universe
 
-# --- IMPORTAÇÃO DA NOVA ESTRATÉGIA ---
-from co_piloto_quant.strategies.base import AdaptiveSniperStrategy
+from co_piloto_quant.data.indicator_engine import IndicatorEngine
+from co_piloto_quant.strategies.loader import load_strategy
+from co_piloto_quant import config
+from co_piloto_quant.utils.math_tools import calculate_z_score
+from co_piloto_quant.indicators.names import IndicatorNames
 
 # Configuração do logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -28,34 +27,61 @@ def process_single_ticker(ticker):
     Processa um único ativo: carrega dados, calcula indicadores e aplica a estratégia.
     """
     try:
-        # 1. Carregamento
+        # 1. Carregamento e Processamento Básico
         raw_df = load_price_data(ticker)
-        if raw_df.empty:
+        if raw_df is None or raw_df.empty or len(raw_df) < config.HURST_WINDOW:
             return None
+        # 1.5. Utiliza o DataFrame bruto diretamente para o IndicatorEngine
+        df_for_indicators = raw_df
 
-        # 2. Processamento Básico
-        processed_df = process_data(raw_df, ticker)
+        # 2. Cálculo de Indicadores com IndicatorEngine
+        engine = IndicatorEngine(df_for_indicators)
+        engine.add_indicator(
+            'bollinger_bands', 
+            period=config.BB_PERIOD, 
+            std_devs=[config.BB_ENTRY_STD_DEV_DEFAULT, 2.0]
+        ).add_indicator(
+            'stochastic',
+            k_period=config.STOCH_K_PERIOD,
+            k_smooth=config.STOCH_K_SMOOTH,
+            d_smooth=config.STOCH_D_SMOOTH
+        ).add_indicator(
+            'system_tpm',
+            indicator='obtr',
+            period=config.SYSTEM_PERIOD
+        ).add_indicator(
+            'hurst',
+            window=config.HURST_WINDOW,
+            kind='price'
+        ).add_indicator(
+            'entropy',
+            window=config.ENTROPY_WINDOW
+        )
         
-        # 3. Cálculo de Indicadores (Pesado)
-        df_with_indicators = calculate_indicators(processed_df)
+        df_with_indicators = engine.get_data()
+
+        # 3. Cálculo de Z-Scores (separadamente, como no backtest)
+        hurst_col = IndicatorNames.hurst(config.HURST_WINDOW, kind='price')
+        entropy_col = IndicatorNames.entropy(config.ENTROPY_WINDOW)
+        hurst_z_col = IndicatorNames.hurst_z(config.HURST_WINDOW, kind='price')
+        entropy_z_col = IndicatorNames.entropy_z(config.ENTROPY_WINDOW)
+
+        if hurst_col in df_with_indicators.columns:
+            df_with_indicators[hurst_z_col] = calculate_z_score(df_with_indicators[hurst_col], window=config.HURST_WINDOW)
+
+        if entropy_col in df_with_indicators.columns:
+            df_with_indicators[entropy_z_col] = calculate_z_score(df_with_indicators[entropy_col], window=config.ENTROPY_WINDOW)
 
         if df_with_indicators.empty or df_with_indicators.iloc[-1].isnull().all():
             return None
 
-        # 4. --- APLICAÇÃO DA ESTRATÉGIA (NOVO) ---
-        # Instancia a estratégia e executa o evaluate (vetorizado)
-        strategy = AdaptiveSniperStrategy()
-        df_analyzed = strategy.evaluate(df_with_indicators)
+        # 4. Aplicação da Estratégia (Modo Live)
+        check_rules = load_strategy(mode='live')
+        sinal = check_rules(df_with_indicators) # A estratégia live pega os dados que precisa
 
-        # Salva o resultado processado (agora com colunas SIGNAL e STOP_LOSS)
-        PROCESSED_DATA_PATH.mkdir(parents=True, exist_ok=True)
-        file_path = PROCESSED_DATA_PATH / f"{ticker}_processed.csv"
-        df_analyzed.to_csv(file_path)
+        latest_data = df_with_indicators.iloc[-1]
 
-        # Pega apenas a última linha para o relatório do dia
-        latest_data = df_analyzed.iloc[-1]
-
-        return ticker, latest_data
+        return ticker, sinal, latest_data
 
     except Exception as e:
         logger.error(f"Erro ao processar {ticker}: {e}", exc_info=False)
@@ -63,28 +89,26 @@ def process_single_ticker(ticker):
 
 def run_scanner():
     """
-    Executa o scanner de mercado utilizando a AdaptiveSniperStrategy.
+    Executa o scanner de mercado utilizando a estratégia ativa via loader.
     """
     tickers = get_expanded_universe()
-    logger.info(f"Scanner iniciado para {len(tickers)} tickers.")
+    logger.info(f"Scanner iniciado para {len(tickers)} tickers com a estratégia '{config.ACTIVE_STRATEGY}'.")
 
     # 1. Atualização da Base de Dados
     logger.info("Verificando atualizações de dados...")
     try:
-        fetch_batch_data(tickers, period="max", interval="1d")
+        fetch_batch_data(tickers, period="1y", interval="1d") # Busca um período menor para agilizar
     except Exception as e:
         logger.error(f"Erro no download em lote: {e}")
-        # Não retorna, tenta processar com o que tem
 
     all_results = []
-    logger.info("Iniciando análise paralela (Strategy Pattern)...")
+    logger.info("Iniciando análise paralela...")
 
     # 2. Análise em Paralelo
-    # Usa todos os núcleos da CPU para calcular indicadores e rodar a estratégia
     with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
         future_to_ticker = {executor.submit(process_single_ticker, t): t for t in tickers}
         
-        for future in tqdm(concurrent.futures.as_completed(future_to_ticker), total=len(tickers), desc="Analisando"):
+        for future in tqdm(concurrent.futures.as_completed(future_to_ticker), total=len(tickers), desc="Analisando Ativos"):
             result = future.result()
             if result:
                 all_results.append(result)
@@ -94,65 +118,41 @@ def run_scanner():
     # 3. Processamento e Relatório
     report_data = []
     
-    for ticker, latest in all_results:
-        # Extrai o sinal da nova coluna 'SIGNAL'
-        signal = latest.get('SIGNAL', 'HOLD')
+    for ticker, sinal, latest in all_results:
+        action = sinal.get('action', 'NEUTRO')
         close_price = latest.get('close')
         
-        # Adaptador para manter compatibilidade com o recorder.py existente
-        # Simula o dicionário que a check_rules antiga retornava
-        rules_check_simulated = {
-            'Sinal_Compra': signal == 'BUY',
-            'Sinal_Venda': signal == 'SELL',
-            'Stop_Loss_Sugerido_Long': latest.get('STOP_LOSS') if signal == 'BUY' else None,
-            'Stop_Loss_Sugerido_Short': latest.get('STOP_LOSS') if signal == 'SELL' else None,
-            'Motivo_Bloqueio': 'Strategy Evaluated'
-        }
-
         # Gravação no Banco (se houver sinal)
-        if signal == 'BUY':
-            record_signal(ticker, 'COMPRA_FINAL', close_price, rules_check_simulated)
-        elif signal == 'SELL':
-            record_signal(ticker, 'VENDA_FINAL', close_price, rules_check_simulated)
+        if action == 'COMPRA':
+            record_signal(ticker, 'COMPRA_FINAL', close_price, sinal)
+        elif action == 'VENDA':
+            record_signal(ticker, 'VENDA_FINAL', close_price, sinal)
 
         # Dados para o Relatório de Console
-        hurst_val = latest.get('Hurst_72_returns', 0.5)
-        entropy_val = latest.get('Entropy_20', 10.0)
+        hurst_col = IndicatorNames.hurst(config.HURST_WINDOW, kind='price')
+        entropy_col = IndicatorNames.entropy(config.ENTROPY_WINDOW)
+        stoch_k_col = IndicatorNames.stochastic_k(config.STOCH_K_PERIOD, config.STOCH_K_SMOOTH)
         
         status_info = {
             'Ticker': ticker,
             'Preço': close_price,
-            'Hurst': hurst_val,
-            'Estocástico': latest.get(f'stoch_k_{80}_{3}'),
-            'Entropy_Score': entropy_val,
-            
-            # Sinais Finais (Vindos da Estratégia)
-            'Sinal_Compra_Final': signal == 'BUY',
-            'Sinal_Venda_Final': signal == 'SELL',
-            
-            # Stops (Vindos da Estratégia)
-            'Stop Sugerido Compra': rules_check_simulated['Stop_Loss_Sugerido_Long'],
-            'Stop Sugerido Venda': rules_check_simulated['Stop_Loss_Sugerido_Short'],
-
-            # Diagnósticos de Regime
-            'Regime_Tendencia': hurst_val > 0.54,
-            'Regime_Lateral': hurst_val < 0.46,
-            'Regime_Caotico': entropy_val >= 3.2, # Entropia alta
-            'Potencial_Squeeze': (
-                latest.get('close') <= latest.get('BB_Upper_200_0.45', float('inf')) and
-                latest.get('close') >= latest.get('BB_Lower_200_0.45', float('-inf'))
-            )
+            'Hurst': latest.get(hurst_col, 0.5),
+            'Estocástico': latest.get(stoch_k_col),
+            'Entropy_Score': latest.get(entropy_col, 10.0),
+            'Ação': action,
+            'Stop': sinal.get('stop_loss'),
+            'Motivo': sinal.get('motivo', '')
         }
         report_data.append(status_info)
 
     # --- EXIBIÇÃO DO RELATÓRIO ---
     pd.set_option('display.float_format', lambda x: f'{x:.2f}')
     pd.set_option('display.max_rows', None) 
-    pd.set_option('display.width', 1000)
+    pd.set_option('display.width', 120)
 
-    print("\n" + "="*80)
-    print(f"      RAIO-X DE MERCADO - STRATEGY PATTERN ({pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')})")
-    print("="*80)
+    print("\n" + "="*120)
+    print(f"      RAIO-X DE MERCADO - ESTRATÉGIA ATIVA: {config.ACTIVE_STRATEGY} ({pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')})")
+    print("="*120)
 
     if not report_data:
         print("Nenhum dado processado.")
@@ -173,18 +173,19 @@ def run_scanner():
             print(f"Erro ao filtrar {title}: {e}")
 
     # 1. SINAIS
-    print("\n--- 1. SINAIS CONFIRMADOS (ADAPTIVE SNIPER) ---")
-    print_group("COMPRAS", "Sinal_Compra_Final == True", ['Ticker', 'Preço', 'Stop Sugerido Compra', 'Estocástico', 'Hurst'])
-    print_group("VENDAS", "Sinal_Venda_Final == True", ['Ticker', 'Preço', 'Stop Sugerido Venda', 'Estocástico', 'Hurst'])
+    print("\n--- 1. SINAIS IDENTIFICADOS ---")
+    print_group("COMPRAS", "Ação == 'COMPRA'", ['Ticker', 'Preço', 'Stop', 'Estocástico', 'Hurst', 'Motivo'])
+    print_group("VENDAS", "Ação == 'VENDA'", ['Ticker', 'Preço', 'Stop', 'Estocástico', 'Hurst', 'Motivo'])
 
     # 2. REGIMES
-    print("\n--- 2. CONTEXTO DE MERCADO ---")
-    print_group("ALTA TENDÊNCIA (Hurst > 0.54)", "Regime_Tendencia == True", ['Ticker', 'Preço', 'Hurst'])
-    print_group("LATERAL / REVERSÃO (Hurst < 0.46)", "Regime_Lateral == True", ['Ticker', 'Preço', 'Hurst', 'Estocástico'])
-    print_group("SQUEEZE (Volatilidade Comprimida)", "Potencial_Squeeze == True", ['Ticker', 'Preço', 'Hurst'])
-    print_group("PERIGO (Caos/Ruído Alto)", "Regime_Caotico == True", ['Ticker', 'Entropy_Score', 'Hurst'])
-
-    print("\n" + "="*80)
+    hurst_query_tendencia = f"Hurst > {config.HURST_THRESHOLD_TREND}"
+    hurst_query_reversao = f"Hurst < {config.HURST_THRESHOLD_REVERSION}"
+    
+    print("\n--- 2. CONTEXTO DE MERCADO (DIAGNÓSTICO) ---")
+    print_group(f"ALTA TENDÊNCIA (Hurst > {config.HURST_THRESHOLD_TREND})", hurst_query_tendencia, ['Ticker', 'Preço', 'Hurst'])
+    print_group(f"LATERAL / REVERSÃO (Hurst < {config.HURST_THRESHOLD_REVERSION})", hurst_query_reversao, ['Ticker', 'Preço', 'Hurst', 'Estocástico'])
+    
+    print("\n" + "="*120)
     print("Scanner finalizado com sucesso.")
 
 if __name__ == "__main__":
