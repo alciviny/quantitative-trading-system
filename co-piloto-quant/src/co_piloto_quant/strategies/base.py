@@ -7,7 +7,8 @@ import os
 from co_piloto_quant.config import (
     BB_PERIOD, 
     STOCH_K_PERIOD, 
-    STOCH_K_SMOOTH
+    STOCH_K_SMOOTH,
+    HURST_WINDOW
 )
 from co_piloto_quant.indicators.names import IndicatorNames
 
@@ -99,6 +100,11 @@ class AdaptiveSniperStrategy(Strategy):
     def _calculate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """ Lógica de cálculo de sinais, antes contida em 'evaluate'. """
         
+        # Converte todas as colunas numéricas para float para evitar erros de tipo
+        numeric_cols = df.select_dtypes(include=[np.integer]).columns
+        for col in numeric_cols:
+            df[col] = df[col].astype(float)
+        
         # 1. Definição centralizada dos nomes das colunas via IndicatorNames
         col_bb_upper = IndicatorNames.bollinger_upper(BB_PERIOD, self.bb_entry_std_dev)
         col_bb_lower = IndicatorNames.bollinger_lower(BB_PERIOD, self.bb_entry_std_dev)
@@ -108,7 +114,7 @@ class AdaptiveSniperStrategy(Strategy):
         
         col_stoch_k  = IndicatorNames.stochastic_k(STOCH_K_PERIOD, STOCH_K_SMOOTH)
         col_wwma     = IndicatorNames.wwma(200)
-        col_hurst_z  = IndicatorNames.hurst_z()
+        col_hurst_z  = IndicatorNames.hurst_z(HURST_WINDOW)
         # A janela de entropia é 20 em analysis.py
         col_entropy_z = IndicatorNames.entropy_z(20) 
 
@@ -127,14 +133,21 @@ class AdaptiveSniperStrategy(Strategy):
         mask_buy_zone = (df['close'] >= df[col_bb_lower]) & (df['close'] <= df[col_bb_upper])
         mask_stoch_buy = df[col_stoch_k] < 30
         
-        col_obtr_mid = IndicatorNames.tpm_band('obtr', 'middle_band')
-        col_wad_mid = IndicatorNames.tpm_band('wad', 'middle_band')
+        # As colunas TPM podem não estar presentes
+        mask_flow_buy = pd.Series(True, index=df.index)  # Default: permite compra
+        if 'obtr' in df.columns:
+            # Procura pela banda média de OBTR (qualquer período)
+            obtr_cols = [c for c in df.columns if c.startswith('obtr_') and '_middle' in c]
+            if obtr_cols:
+                col_obtr_mid = obtr_cols[0]
+                mask_flow_buy = df['obtr'] > df[col_obtr_mid]
         
-        mask_flow_buy = pd.Series(False, index=df.index)
-        if 'obtr' in df.columns and col_obtr_mid in df.columns:
-             mask_flow_buy = (df['obtr'] > df[col_obtr_mid])
-        if 'wad' in df.columns and col_wad_mid in df.columns:
-             mask_flow_buy = mask_flow_buy | (df['wad'] > df[col_wad_mid])
+        if 'wad' in df.columns:
+            # Procura pela banda média de WAD (qualquer período)
+            wad_cols = [c for c in df.columns if c.startswith('wad_') and '_middle' in c]
+            if wad_cols:
+                col_wad_mid = wad_cols[0]
+                mask_flow_buy = mask_flow_buy | (df['wad'] > df[col_wad_mid])
 
         final_buy_signal = mask_regime_ok & mask_buy_zone & mask_stoch_buy & mask_flow_buy
         
@@ -143,9 +156,13 @@ class AdaptiveSniperStrategy(Strategy):
         mask_sell_zone = df['close'] >= df[col_bb_upper_exit]
         mask_stoch_sell = df[col_stoch_k] > 70
         
-        mask_flow_sell = pd.Series(False, index=df.index)
-        if 'obtr' in df.columns and col_obtr_mid in df.columns:
-             mask_flow_sell = df['obtr'] < df[col_obtr_mid]
+        # As colunas TPM podem não estar presentes
+        mask_flow_sell = pd.Series(True, index=df.index)  # Default: permite venda
+        if 'obtr' in df.columns:
+            obtr_cols = [c for c in df.columns if c.startswith('obtr_') and '_middle' in c]
+            if obtr_cols:
+                col_obtr_mid = obtr_cols[0]
+                mask_flow_sell = df['obtr'] < df[col_obtr_mid]
              
         final_sell_signal = mask_regime_ok & mask_trend_down & mask_sell_zone & mask_stoch_sell & mask_flow_sell
         
