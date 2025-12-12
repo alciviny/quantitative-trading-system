@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  quant_bot:
+    build: .
+    # O diretório de trabalho dentro do container é definido no Dockerfile como /app/co-piloto-quant
+    working_dir: /app/co-piloto-quant
+    container_name: co-piloto-quant_bot
+    restart: unless-stopped # Reinicia o container a menos que seja parado manualmente
+
+    environment:
+      # Variáveis de ambiente para o Telegram
+      TELEGRAM_TOKEN: "${TELEGRAM_TOKEN}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
+      
+      # Variáveis de ambiente para a conexão MT5
+      # ATENÇÃO: Nunca coloque credenciais diretamente aqui em produção.
+      # Use um arquivo .env para as variáveis (ex: docker-compose up --env-file ./.env)
+      # ou um sistema de segredos do Docker Swarm/Kubernetes.
+      MT5_LOGIN: "${MT5_LOGIN}"
+      MT5_PASSWORD: "${MT5_PASSWORD}"
+      MT5_SERVER: "${MT5_SERVER}"
+
+      # Modo de Dry Run para testes/simulação
+      DRY_RUN: "True" # Defina como "False" para trading real
+    
+    # Mapeamento de volumes (opcional, mas recomendado para logs ou dados persistentes)
+    # Exemplo: Mapear um diretório de logs para fora do container
+    # volumes:
+    #   - ./logs:/app/co-piloto-quant/logs
+
+    # Dependências (se você tiver outros serviços, como um banco de dados)
+    # depends_on:
+    #   - database_service
+
+    # Limites de recursos (opcional, para controlar o uso de CPU/memória)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '0.50'
+    #       memory: 512M
