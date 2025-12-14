@@ -44,15 +44,25 @@ def _kalman_bands_apply(close, transition_cov, std_dev):
     """Executa o filtro de Kalman coluna por coluna para o vectorbt.
 
     Args:
-        close (np.ndarray): matriz (t x n)
+        close (np.ndarray or pd.Series): matriz (t x n) ou série temporal
         transition_cov (float or array): variância do processo
         std_dev (float): multiplicador das bandas
 
     Returns:
         tuple: middle, upper, lower bands
     """
-    rows, cols = close.shape
-    middle_band = np.empty_like(close)
+    # Converter para numpy array se necessário
+    if hasattr(close, 'values'):
+        close_array = close.values
+    else:
+        close_array = np.asarray(close)
+    
+    # Garantir que seja 2D
+    if close_array.ndim == 1:
+        close_array = close_array.reshape(-1, 1)
+    
+    rows, cols = close_array.shape
+    middle_band = np.empty_like(close_array)
 
     # Broadcast manual dos parâmetros
     if np.isscalar(transition_cov):
@@ -62,7 +72,7 @@ def _kalman_bands_apply(close, transition_cov, std_dev):
 
     # Loop coluna a coluna (pykalman não é vetorizado)
     for i in range(cols):
-        col = close[:, i]
+        col = close_array[:, i]
 
         # Segurança: se a coluna for toda NaN ou vazia
         if np.all(np.isnan(col)):
@@ -74,10 +84,10 @@ def _kalman_bands_apply(close, transition_cov, std_dev):
     # ==========================================================================
     # Construção das bandas — usando volatilidade do resíduo
     # ==========================================================================
-    residuals = close - middle_band
+    residuals = close_array - middle_band
 
-    # Rolling std muito rápido e leve com vbt
-    rolling_std = vbt.pd_accel.rolling_std(residuals, window=20, min_periods=1)
+    # Rolling std usando pandas diretamente
+    rolling_std = pd.DataFrame(residuals).rolling(window=20, min_periods=1).std().values
 
     upper_band = middle_band + (rolling_std * std_dev)
     lower_band = middle_band - (rolling_std * std_dev)
@@ -98,6 +108,5 @@ KalmanBands = vbt.IndicatorFactory(
     _kalman_bands_apply,
     transition_cov=0.01,  # padrão suave
     std_dev=2.0,
-    keep_pd=True,
-    require_input_shape=True
+    keep_pd=False,
 )

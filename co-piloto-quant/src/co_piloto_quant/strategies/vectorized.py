@@ -26,35 +26,37 @@ def generate_signals_vectorized(
     """
     Gera sinais usando KALMAN BANDS (Reativo) em vez de Bollinger (Atrasado).
     """
-    # ===================== LÓGICA DA ESTRATÉGIA (ATUALIZADA) =====================
+
+    # ===================== PREÇO =====================
     price = close
-    # --- Cálculo das KALMAN BANDS para ENTRADA ---
-    # Substituímos BBANDS por KalmanBands.
-    # transition_cov=0.05 torna a média 'inteligente' (foge rápido de quedas)
-    # bb_dev_range agora controla o desvio do Kalman (std_dev)
+
+    # ===================== KALMAN BANDS (ENTRADA) =====================
     kb_indicator = KalmanBands.run(
-        price,
+        close=price,
         transition_cov=0.05,
         std_dev=bb_dev_range
     )
 
-    # A lógica booleana permanece a mesma: Preço < Banda Inferior
-    # Mas agora a banda inferior 'desce' junto com o crash, evitando compra prematura
-    entry_bb = price.vbt <= kb_indicator.lower  # (num_rows, num_bb_params)
+    # Preço abaixo da banda inferior (entrada)
+    entry_bb = price.vbt <= kb_indicator.lower  # Series ou DataFrame
 
-    # --- Filtro de Volatilidade (Regime-Aware) ---
-    # (Mantém igual ao original)
+    # Garante 2D para broadcasting (grid / app)
+    if entry_bb.ndim == 1:
+        entry_bb = entry_bb.to_frame()
+
+    # ===================== FILTRO DE VOLATILIDADE (REGIME) =====================
     ret = price.pct_change()
     vol_fast = ret.rolling(10).std()
     vol_slow = ret.rolling(60).std()
     regime_vol = vol_fast / (vol_slow + 1e-6)
-    vol_mask = regime_vol.values[:, None] <= vol_max_range[None, :]
 
-    # --- Combinação 3D das condições de entrada ---
-    entries_3d = entry_bb.values[:, :, None] & vol_mask[:, None, :]
+    # Usa apenas o primeiro valor (app ou grid)
+    vol_condition = regime_vol <= vol_max_range[0]
 
-    # --- Filtro de Estocástico Suave ---
-    # (Mantém igual ao original)
+    # Combinação inicial
+    entries = entry_bb & vol_condition
+
+    # ===================== FILTRO ESTOCÁSTICO =====================
     stoch_k_series = vbt.STOCH.run(
         high,
         low,
@@ -62,27 +64,24 @@ def generate_signals_vectorized(
         k_window=STOCH_K_PERIOD,
         d_window=STOCH_K_SMOOTH,
     ).percent_k
-    stoch_k = stoch_k_series.values
-    stoch_weight = np.clip((30 - stoch_k) / 30, 0, 1)
 
-    weighted_entries_3d = entries_3d * stoch_weight[:, None, None]
-    final_entries = weighted_entries_3d > 0.5
+    stoch_condition = stoch_k_series <= 30  # Oversold
 
-    # --- Reshape para 2D ---
-    n_rows, n_bb, n_vol = final_entries.shape
-    num_combinations = n_bb * n_vol
-    entries_2d = final_entries.reshape(n_rows, num_combinations)
+    # Combinação final de entrada
+    final_entries = entries & stoch_condition
 
-    # --- Lógica de SAÍDA (Também Atualizada para Kalman) ---
-    # Usar Kalman na saída protege o lucro. Se o preço subir rápido e virar,
-    # a banda Kalman vira junto e garante a saída antes da devolução tudo.
+    # ===================== KALMAN BANDS (SAÍDA) =====================
     kb_exit_indicator = KalmanBands.run(
-        price,
+        close=price,
         transition_cov=0.05,
         std_dev=bb_exit_std_dev
     )
 
-    # Preço tocou na banda superior do Kalman
-    exits_2d = (price.vbt >= kb_exit_indicator.upper).vbt.tile(num_combinations)
+    # ===== CORREÇÃO CRÍTICA: Series vs DataFrame =====
+    upper = kb_exit_indicator.upper
+    if isinstance(upper, pd.DataFrame):
+        upper = upper.iloc[:, 0]
 
-    return entries_2d, exits_2d
+    exits = price >= upper
+
+    return final_entries, exits
