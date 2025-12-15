@@ -27,6 +27,14 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+try:
+    from scipy.stats import median_abs_deviation
+except ImportError:
+    try:
+        from scipy.stats import median_absolute_deviation as median_abs_deviation
+    except ImportError:
+        median_abs_deviation = None
+
 # Estratégias / indicadores
 from co_piloto_quant.strategies.base import AdaptiveSniperStrategy
 from co_piloto_quant.strategies.mean_reversion import MeanReversionStrategy
@@ -35,7 +43,7 @@ from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_
 
 # --------------------------- CONFIG ---------------------------
 ML_READY_PATH = "src/co_piloto_quant/data/ml_ready"
-START_DATE = "2023-01-01"
+START_DATE = "2021-12-08"
 CUSTO_TOTAL_TRADE = 0.0006  # 0.06% round-trip (taxas + slippage estimado)
 DEFAULT_WORKERS = 4
 
@@ -117,46 +125,65 @@ def apply_sanity_check(df: pd.DataFrame, ticker: Optional[str] = None) -> Tuple[
 
 
 # --------------------------- INDICADORES (FORÇADO) ---------------------------
+def _calculate_rolling_vol_of_vol(price_series: pd.Series, window: int = 20) -> pd.Series:
+    """Calculates rolling Volatility of Volatility (VolVol)."""
+    if median_abs_deviation is None:
+        logger.warning("Scipy not found, VolVol calculation will be skipped.")
+        return pd.Series(0.0, index=price_series.index)
+        
+    returns = price_series.pct_change()
+    vol = returns.rolling(window).std()
+    vol_diff = vol.diff()
+    
+    # Use rolling apply to calculate MAD on the vol_diff
+    vol_vol = vol_diff.rolling(window).apply(lambda x: median_abs_deviation(x[~np.isnan(x)], scale='normal'), raw=False)
+    return vol_vol
+
 def calculate_missing_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Calcula (ou recalcula) hurst_z_72_c e entropy_z_20 de forma forçada e robusta.
-
-    Observações:
-    - Hurst recebe série pré-tratada (close ffilled/bfilled)
-    - Tratamos valores infinitos e NaNs antes do rolling
-    """
+    """Calcula (ou recalcula) hurst_z, entropy_z e VolVol_Z de forma forçada e robusta."""
     df = df.copy()
-
-    # prepara série de preços para indicadores
     close_s = df['close'].ffill().bfill()
 
     # --- HURST (FORÇADO) ---
     try:
-        # calcula hurst em modo 'returns' (interface do módulo)
         hurst_series = calculate_rolling_hurst(close_s, window=72, kind='returns')
         hurst_series = hurst_series.replace([np.inf, -np.inf], np.nan)
-
-        rolling_mean = hurst_series.rolling(252, min_periods=1).mean()
-        rolling_std = hurst_series.rolling(252, min_periods=1).std().replace(0, np.nan)
-
-        hurst_z = (hurst_series - rolling_mean) / rolling_std
-        df['hurst_z_72_c'] = hurst_z.fillna(0.5)
+        rolling_mean_h = hurst_series.rolling(252, min_periods=1).mean()
+        rolling_std_h = hurst_series.rolling(252, min_periods=1).std().replace(0, np.nan)
+        df['hurst_z_72_c'] = ((hurst_series - rolling_mean_h) / rolling_std_h).fillna(0.5)
     except Exception as e:
         logger.debug("Hurst calc failed: %s", e)
         df['hurst_z_72_c'] = 0.5
 
-    # --- ENTROPY (RECALC) ---
+    # --- ENTROPY (RAW & Z-SCORE) ---
     try:
         entropy_series = calculate_rolling_entropy(close_s, window=20)
         entropy_series = entropy_series.replace([np.inf, -np.inf], np.nan)
-
-        rolling_mean = entropy_series.rolling(252, min_periods=1).mean()
-        rolling_std = entropy_series.rolling(252, min_periods=1).std().replace(0, np.nan)
-
-        entropy_z = (entropy_series - rolling_mean) / rolling_std
-        df['entropy_z_20'] = entropy_z.fillna(0.5)
+        df['Entropy_20'] = entropy_series # Raw value for absolute threshold
+        
+        rolling_mean_e = entropy_series.rolling(252, min_periods=1).mean()
+        rolling_std_e = entropy_series.rolling(252, min_periods=1).std().replace(0, np.nan)
+        df['Entropy_Z'] = ((entropy_series - rolling_mean_e) / rolling_std_e).fillna(0.5)
     except Exception as e:
         logger.debug("Entropy calc failed: %s", e)
-        df['entropy_z_20'] = 0.5
+        df['Entropy_20'] = 0.0
+        df['Entropy_Z'] = 0.5
+        
+    # --- VOL_OF_VOL (Z-SCORE) ---
+    try:
+        vol_vol_series = _calculate_rolling_vol_of_vol(close_s, window=20)
+        vol_vol_series = vol_vol_series.replace([np.inf, -np.inf], np.nan)
+        
+        rolling_mean_v = vol_vol_series.rolling(252, min_periods=1).mean()
+        rolling_std_v = vol_vol_series.rolling(252, min_periods=1).std().replace(0, np.nan)
+        df['VolVol_Z'] = ((vol_vol_series - rolling_mean_v) / rolling_std_v).fillna(0.0)
+    except Exception as e:
+        logger.debug("VolVol_Z calc failed: %s", e)
+        df['VolVol_Z'] = 0.0
+
+    # Renaming for consistency with strategy filter
+    if 'entropy_z_20' in df.columns:
+        df.rename(columns={'entropy_z_20': 'Entropy_Z'}, inplace=True)
 
     return df
 
@@ -227,69 +254,125 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, close_open_
 
     df_eval['SIGNAL'] = df_eval['SIGNAL'].astype(str)
 
-    trades = []
-    in_trade = False
-    entry_price = 0.0
-    entry_date = None
-    entry_regime = ''
-    entry_hurst = 0.0
-    entry_entropy = 0.0
-    entry_signal_type = ''
-
     closes = df_eval['close'].values
-    lows = df_eval['low'].values if 'low' in df_eval.columns else np.full(len(df_eval), np.nan)
-    signals = df_eval['SIGNAL'].values
     dates = df_eval.index
-
+    signals = df_eval['SIGNAL'].values
     regimes = df_eval['REGIME'].values if 'REGIME' in df_eval.columns else np.full(len(df_eval), '')
-    hursts = df_eval['hurst_z_72_c'].values if 'hurst_z_72_c' in df_eval.columns else np.zeros(len(df_eval))
-    entropies = df_eval['entropy_z_20'].values if 'entropy_z_20' in df_eval.columns else np.zeros(len(df_eval))
+    
+    lows = df_eval['low'].values if 'low' in df_eval.columns else closes
+
+    cols_lower = [c.lower() for c in df_eval.columns]
+    rsi_vals = np.full(len(df_eval), 50.0)
+    bb_mid_vals = np.full(len(df_eval), 0.0)
+    hurst_vals = np.full(len(df_eval), 0.5)
+    entropy_vals = np.full(len(df_eval), 0.0)
+
+    for c in df_eval.columns:
+        if 'rsi' in c.lower() or 'ifr' in c.lower():
+            rsi_vals = df_eval[c].fillna(50).values
+            break
+            
+    for c in df_eval.columns:
+        if 'bb_middle' in c.lower() or 'mms_20' in c.lower() or 'wwma' in c.lower():
+            bb_mid_vals = df_eval[c].fillna(0).values
+            break
+
+    for c in df_eval.columns:
+        if 'hurst' in c.lower() and 'z' in c.lower():
+            hurst_vals = df_eval[c].fillna(0.5).values
+            break
+
+    for c in df_eval.columns:
+        if 'entropy' in c.lower() and 'z' in c.lower():
+            entropy_vals = df_eval[c].fillna(0.0).values
+            break
 
     has_stop = 'STOP_LOSS' in df_eval.columns
-    stops = df_eval['STOP_LOSS'].values if has_stop else np.full(len(df_eval), np.nan)
+    stops_col = df_eval['STOP_LOSS'].values if has_stop else np.full(len(df_eval), np.nan)
 
-    # trade-level adaptive sanity: threshold based on recent volatility (ATR-like)
-    pct_rets = pd.Series(df_eval['close']).pct_change().abs()
-    adaptive_threshold = max(0.5, float(pct_rets.rolling(20, min_periods=1).quantile(0.99).fillna(0.5).iloc[-1]))
+    trades = []
+    in_trade = False
+    
+    entry_price = 0.0
+    entry_date = None
+    entry_idx = 0
+    entry_regime = ''
+    current_technical_stop = 0.0
+    cooldown_until = None
+    highest_price = 0.0
+
+    MAX_HARD_STOP = 0.05
+    MAX_DAYS_IN_LOSS = 10
 
     for i in range(1, len(df_eval)):
         sig = signals[i]
+        today_regime = regimes[i]
 
         if not in_trade and sig == 'BUY':
+            
+            if cooldown_until and dates[i] < cooldown_until:
+                continue
+            
+            if today_regime != 'BULL_CALM':
+                continue 
+            
             in_trade = True
             entry_price = float(closes[i])
             entry_date = dates[i]
-            entry_regime = regimes[i]
-            entry_hurst = float(hursts[i]) if not np.isnan(hursts[i]) else 0.0
-            entry_entropy = float(entropies[i]) if not np.isnan(entropies[i]) else 0.0
-            entry_signal_type = infer_signal_type(df_eval.iloc[i], list(df_eval.columns))
+            entry_idx = i
+            entry_regime = today_regime
+            highest_price = entry_price
+            
+            if has_stop and not np.isnan(stops_col[i]):
+                current_technical_stop = float(stops_col[i])
+            else:
+                current_technical_stop = 0.0
 
         elif in_trade:
-            exit_signal = (sig == 'SELL')
-            hit_stop = False
+            exit_price = 0.0
+            reason = ''
+            triggered = False
+            
+            current_close = float(closes[i])
+            current_low = float(lows[i])
+            current_high = float(closes[i])
+            days_held = (dates[i] - entry_date).days
+            
+            highest_price = max(highest_price, current_close)
+            
+            if highest_price >= entry_price * 1.08:
+                current_technical_stop = max(current_technical_stop, entry_price * 1.01)
+            
+            hard_stop_price = entry_price * (1 - MAX_HARD_STOP)
+            if not triggered and current_low <= hard_stop_price:
+                exit_price = min(hard_stop_price, current_close)
+                reason = 'HARD_STOP'
+                triggered = True
 
-            if has_stop and not np.isnan(stops[i]):
-                try:
-                    if lows[i] <= stops[i]:
-                        hit_stop = True
-                except Exception:
-                    pass
+            elif not triggered and current_technical_stop > 0 and current_low <= current_technical_stop:
+                exit_price = min(current_technical_stop, current_close)
+                reason = 'STOP_TECNICO'
+                triggered = True
 
-            if exit_signal or hit_stop:
-                exit_price = float(closes[i]) if not hit_stop else float(stops[i])
-                reason = 'STOP' if hit_stop else 'SIGNAL'
+            elif not triggered and days_held > MAX_DAYS_IN_LOSS and current_close < entry_price:
+                exit_price = current_close
+                reason = 'TIME_STOP'
+                triggered = True
 
+            elif not triggered and 'BEAR' in entry_regime:
+                if (rsi_vals[i] > 50) or (bb_mid_vals[i] > 0 and current_close >= bb_mid_vals[i]):
+                    exit_price = current_close
+                    reason = 'BEAR_OPTIMIZED'
+                    triggered = True
+
+            elif not triggered and sig == 'SELL':
+                exit_price = current_close
+                reason = 'SIGNAL'
+                triggered = True
+
+            if triggered:
                 raw_ret = (exit_price / entry_price) - 1
-
-                # Trade-level sanity: ignora trades com retorno bruto absurdo (> adaptive_threshold)
-                if abs(raw_ret) > adaptive_threshold:
-                    logger.warning('Ignored trade for %s on %s: raw_ret=%.2f (>adaptive %.2f) — provável split/dado sujo.',
-                                   ticker, dates[i], raw_ret, adaptive_threshold)
-                    in_trade = False
-                    continue
-
                 net_ret = raw_ret - (CUSTO_TOTAL_TRADE * 2)
-                days_held = (dates[i] - entry_date).days
 
                 trades.append({
                     'ticker': ticker,
@@ -297,36 +380,34 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, close_open_
                     'return': net_ret,
                     'win': 1 if net_ret > 0 else 0,
                     'reason': reason,
-                    'hurst_entrada': entry_hurst,
-                    'entropy_entrada': entry_entropy,
-                    'sinal_tipo': entry_signal_type,
-                    'days_held': days_held
+                    'days_held': days_held,
+                    'hurst_entrada': float(hurst_vals[entry_idx]),
+                    'entropy_entrada': float(entropy_vals[entry_idx]),
+                    'sinal_tipo': 'PRICE'
                 })
+                
+                if net_ret < 0:
+                    cooldown_until = dates[i] + pd.Timedelta(days=5)
+                
                 in_trade = False
 
-    # Fecha trade aberto no final
-    if in_trade and close_open_trades and len(df_eval) > 0:
+    if in_trade and close_open_trades:
         exit_price = float(closes[-1])
         raw_ret = (exit_price / entry_price) - 1
-        if abs(raw_ret) > adaptive_threshold:
-            logger.warning('Ignored end-closed trade for %s: raw_ret=%.2f (>adaptive %.2f).', ticker, raw_ret, adaptive_threshold)
-        else:
-            net_ret = raw_ret - (CUSTO_TOTAL_TRADE * 2)
-            days_held = (dates[-1] - entry_date).days
-            trades.append({
-                'ticker': ticker,
-                'regime': entry_regime,
-                'return': net_ret,
-                'win': 1 if net_ret > 0 else 0,
-                'reason': 'END_CLOSED',
-                'hurst_entrada': entry_hurst,
-                'entropy_entrada': entry_entropy,
-                'sinal_tipo': entry_signal_type,
-                'days_held': days_held
-            })
+        net_ret = raw_ret - (CUSTO_TOTAL_TRADE * 2)
+        trades.append({
+            'ticker': ticker,
+            'regime': entry_regime,
+            'return': net_ret,
+            'win': 1 if net_ret > 0 else 0,
+            'reason': 'END_CLOSED',
+            'days_held': (dates[-1] - entry_date).days,
+            'hurst_entrada': float(hurst_vals[entry_idx]),
+            'entropy_entrada': float(entropy_vals[entry_idx]),
+            'sinal_tipo': 'PRICE'
+        })
 
-    df_trades = pd.DataFrame(trades)
-    return df_trades
+    return pd.DataFrame(trades)
 
 
 def process_file(file_path: Path, strategy, start_date: str, close_open_trades: bool) -> pd.DataFrame:
@@ -460,19 +541,37 @@ def save_sanity_report(path: Path) -> None:
 def main():
     setup_logging()
 
-    parser = argparse.ArgumentParser(description='Stress Test - Lab Definitivo')
+    parser = argparse.ArgumentParser(description='Stress Test - Lab Definitivo com Estratégias Adaptativas')
+    
+    # --- Argumentos da Estratégia ---
     parser.add_argument('--strategy', choices=['mean-reversion', 'adaptive-sniper'], default='mean-reversion')
-    parser.add_argument('--bb-std', type=float, default=1.5)
-    parser.add_argument('--rsi-period', type=int, default=120)
-    parser.add_argument('--rsi-buy', type=int, default=35)
-    parser.add_argument('--rsi-sell', type=int, default=65)
-    parser.add_argument('--bb-entry', type=float, default=0.45)
-    parser.add_argument('--bb-exit', type=float, default=2.0)
     parser.add_argument('--start-date', type=str, default=START_DATE)
-    parser.add_argument('--out', type=str, default=None, help='Caminho para salvar relatório final (csv/parquet)')
-    parser.add_argument('--workers', type=int, default=DEFAULT_WORKERS)
-    parser.add_argument('--close-open-trades', action='store_true', help='Fecha trades abertos no final do período')
-    parser.add_argument('--sanity-report', type=str, default='sanity_report.csv', help='Caminho para salvar relatório de tickers contaminados')
+
+    # --- Parâmetros Mean Reversion ---
+    mean_rev_group = parser.add_argument_group('Mean Reversion')
+    mean_rev_group.add_argument('--bb-std', type=float, default=1.5, help='Desvio padrão base para Bollinger Bands.')
+    mean_rev_group.add_argument('--rsi-period', type=int, default=120, help='Período do RSI.')
+    
+    # --- Parâmetros Adaptativos (Mean Reversion) ---
+    adaptive_group = parser.add_argument_group('Adaptive Mean Reversion')
+    adaptive_group.add_argument('--disable-adaptive-rsi', action='store_true', help='Desativa os limiares de RSI adaptativos (usa 40/60 fixo).')
+    adaptive_group.add_argument('--disable-adaptive-bb', action='store_true', help='Desativa as Bandas de Bollinger adaptativas à volatilidade.')
+    adaptive_group.add_argument('--disable-regime-filter', action='store_true', help='Desativa o filtro de regime de mercado tóxico.')
+    adaptive_group.add_argument('--bb-std-volatile', type=float, default=2.5, help='Desvio padrão para BB em mercados voláteis.')
+    adaptive_group.add_argument('--rsi-buy-percentile', type=float, default=0.1, help='Percentil RSI para gatilho de compra (e.g., 0.1 para os 10%% mais baixos).')
+    adaptive_group.add_argument('--rsi-sell-percentile', type=float, default=0.9, help='Percentil RSI para gatilho de venda (e.g., 0.9 para os 10%% mais altos).')
+
+    # --- Parâmetros Adaptive Sniper ---
+    sniper_group = parser.add_argument_group('Adaptive Sniper')
+    sniper_group.add_argument('--bb-entry', type=float, default=0.45)
+    sniper_group.add_argument('--bb-exit', type=float, default=2.0)
+
+    # --- Configurações Gerais de Execução ---
+    exec_group = parser.add_argument_group('Execution')
+    exec_group.add_argument('--out', type=str, default=None, help='Caminho para salvar relatório final (csv/parquet)')
+    exec_group.add_argument('--workers', type=int, default=DEFAULT_WORKERS)
+    exec_group.add_argument('--close-open-trades', action='store_true', help='Fecha trades abertos no final do período')
+    exec_group.add_argument('--sanity-report', type=str, default='sanity_report.csv', help='Caminho para salvar relatório de tickers contaminados')
 
     args = parser.parse_args()
 
@@ -483,8 +582,14 @@ def main():
 
     if args.strategy == 'mean-reversion':
         strategy = MeanReversionStrategy(
-            bb_std_dev=args.bb_std, rsi_period=args.rsi_period,
-            rsi_buy_threshold=args.rsi_buy, rsi_sell_threshold=args.rsi_sell
+            bb_std_dev=args.bb_std, 
+            rsi_period=args.rsi_period,
+            bb_std_dev_volatile=args.bb_std_volatile,
+            adaptive_rsi=not args.disable_adaptive_rsi,
+            adaptive_bb=not args.disable_adaptive_bb,
+            use_regime_filter=not args.disable_regime_filter,
+            rsi_buy_percentile=args.rsi_buy_percentile,
+            rsi_sell_percentile=args.rsi_sell_percentile
         )
     else:
         strategy = AdaptiveSniperStrategy(bb_entry_std_dev=args.bb_entry, bb_exit_std_dev=args.bb_exit)
