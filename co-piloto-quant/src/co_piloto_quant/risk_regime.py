@@ -75,9 +75,14 @@ class RiskRegimeManager:
         # --- CAMADA 1: LIMITES ABSOLUTOS (A "Herança" do seu Detect Toxicity) ---
         # Esses números vêm da sua pesquisa forense anterior. São o "Teto de Vidro".
         
-        # Regra Forense 1: Entropia > 3.2 é tóxica
+        # Regra Forense 1: Entropia > 3.2 é tóxica (caos excessivo)
         if 'Entropy_20' in latest and latest['Entropy_20'] > 3.2:
             return ValidationResult(approved=False, reason=f'TETO ABSOLUTO: Entropia Tóxica ({latest["Entropy_20"]:.2f} > 3.2)')
+
+        # REGRA DE OURO DO LABORATÓRIO: Entropia < 0.10 (tendência excessiva)
+        # Proíbe operar reversão quando o mercado está muito "liso" ou ordenado.
+        if 'Entropy_20' in latest and latest['Entropy_20'] < 0.10:
+            return ValidationResult(approved=False, reason=f'TETO ABSOLUTO: Tendência Extrema (Entropia: {latest["Entropy_20"]:.2f} < 0.10)')
 
         # Regra Forense 2: Volatilidade Pura > 3.5% ao dia é perigoso
         # Garante que 'close' exista e tenha dados suficientes

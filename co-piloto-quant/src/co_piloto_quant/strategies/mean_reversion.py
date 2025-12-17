@@ -23,7 +23,8 @@ class MeanReversionStrategy(Strategy):
                  rsi_period: int = 120,
                  adaptive_rsi: bool = True,
                  adaptive_bb: bool = True,
-                 use_regime_filter: bool = True, # Novo
+                 use_regime_filter: bool = True,
+                 max_half_life: int = 25,  # <--- NOVO PARÂMETRO (Default: 25 dias)
                  rsi_buy_percentile: float = 0.1,
                  rsi_sell_percentile: float = 0.9,
                  adaptive_window: int = 126, # Aprox. 6 meses
@@ -36,6 +37,7 @@ class MeanReversionStrategy(Strategy):
             adaptive_rsi: Se True, usa limiares de RSI baseados em percentil.
             adaptive_bb: Se True, alarga as bandas com a volatilidade.
             use_regime_filter: Se True, proíbe compras em regimes de mercado tóxicos.
+            max_half_life: Limite máximo para o half-life de um ativo ser considerado em reversão à média.
             rsi_buy_percentile: Percentil para o limiar de compra do RSI.
             rsi_sell_percentile: Percentil para o limiar de venda do RSI.
             adaptive_window: Janela (dias) para calcular os parâmetros adaptativos.
@@ -48,6 +50,7 @@ class MeanReversionStrategy(Strategy):
         self.adaptive_rsi = adaptive_rsi
         self.adaptive_bb = adaptive_bb
         self.use_regime_filter = use_regime_filter
+        self.max_half_life = max_half_life # Guarda o valor na classe
         self.rsi_buy_percentile = rsi_buy_percentile
         self.rsi_sell_percentile = rsi_sell_percentile
         self.adaptive_window = adaptive_window
@@ -94,29 +97,32 @@ class MeanReversionStrategy(Strategy):
         buy_signal = price_at_lower | rsi_low
         sell_signal = price_at_upper | rsi_high
         
-        # --- 4. FILTRO DE REGIME (A "VACINA") ---
+        # --- 4. FILTRO DE REGIME (ATUALIZADO - Lógica Goldilocks) ---
         if self.use_regime_filter:
-            # Por padrão, todos os dias são permitidos
             is_toxic = pd.Series(False, index=df.index)
 
-            # Regra 1: Entropia absoluta > 3.2 é tóxica
+            # --- PROTEÇÃO SUPERIOR (Contra Crises) ---
             if 'Entropy_20' in df.columns:
-                is_toxic |= (df['Entropy_20'] > 3.2)
+                is_toxic |= (df['Entropy_20'] > 3.2) # Teto Absoluto
             
-            # Regra 2: Volatilidade diária > 3.5% é perigosa
-            if 'close' in df.columns:
-                daily_vol = df['close'].pct_change().rolling(20).std()
-                is_toxic |= (daily_vol > 0.035)
-
-            # Regra 3: Z-Score da Volatilidade da Volatilidade > 3.0 (instabilidade súbita)
             if 'VolVol_Z' in df.columns:
-                is_toxic |= (df['VolVol_Z'] > 3.0)
-            
-            # Regra 4: Z-Score da Entropia > 2.0 (comportamento anômalo)
+                is_toxic |= (df['VolVol_Z'] > 3.0) # Instabilidade
+
+            # --- PROTEÇÃO INFERIOR (Contra Tendências Lisas - O NOVO FILTRO) ---
+            # Se a Entropia Z-Score for negativa, o mercado está "ordenado demais".
+            # Reversão à média falha aqui porque o preço não repica.
             if 'Entropy_Z' in df.columns:
-                is_toxic |= (df['Entropy_Z'] > 2.0)
-            
-            # Aplica a vacina: zera o sinal de compra em dias tóxicos
+                # Bloqueia se a entropia estiver abaixo da média histórica (Z < 0)
+                # Os seus dados mostram que Wins ocorrem em +0.67 e Losses em -0.16.
+                # Vamos ser conservadores e bloquear tudo abaixo de 0.2
+                is_toxic |= (df['Entropy_Z'] < 0.2) 
+
+            # --- FILTRO DE ELASTICIDADE (Half-Life) ---
+            # Se o Half-Life for muito alto, o ativo perdeu a memória de preço.
+            if 'HalfLife_60' in df.columns:
+                is_toxic |= (df['HalfLife_60'] > self.max_half_life)
+
+            # Aplica a vacina
             buy_signal[is_toxic] = False
 
         # --- 5. Aplicação dos Sinais e Stop Loss ---

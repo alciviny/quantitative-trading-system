@@ -4,6 +4,8 @@ import logging
 from typing import Dict, Callable, Any
 
 # Imports dos indicadores
+import pandas_ta as ta
+from co_piloto_quant.indicators.special.ehlers_hilbert import ehlers_sinewave
 from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
 from co_piloto_quant.indicators.ifr_tpm import calculate_ifr_tpm
 from co_piloto_quant.indicators.ww_moving_average import ww_moving_average
@@ -11,6 +13,7 @@ from co_piloto_quant.indicators.system_tpm import calculate_system_tpm
 from co_piloto_quant.indicators.stochastic_custom import calculate_stochastic_custom
 from co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
 from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
+from co_piloto_quant.indicators.special.half_life import calculate_rolling_ou_params
 
 # --- IMPORTANTE: Importar o padronizador de nomes ---
 from co_piloto_quant.indicators.names import IndicatorNames
@@ -36,6 +39,22 @@ def _entropy_wrapper(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
     return calculate_rolling_entropy(data['close'], **kwargs).to_frame()
 
 
+def _halflife_wrapper(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    # Retorna o DataFrame completo (beta, half_life, etc)
+    return calculate_rolling_ou_params(data['close'], **kwargs)
+
+
+def _ehlers_wrapper(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    # O seu arquivo ehlers_hilbert.py já retorna um DataFrame rico com 'Hilbert_Status'
+    return ehlers_sinewave(data, column='close')
+
+def _chop_wrapper(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    # O Choppiness Index nativo do Pandas TA
+    # length=14 é o padrão clássico do Dreiss
+    chop = data.ta.chop(length=kwargs.get('window', 14))
+    return chop.to_frame(name='Choppiness_14')
+
+
 class IndicatorEngine:
     """
     Classe para calcular e adicionar indicadores técnicos ao DataFrame,
@@ -52,6 +71,9 @@ class IndicatorEngine:
         'hurst': _hurst_wrapper,
         'entropy': _entropy_wrapper,
         'volatility': calculate_volatility,
+        'half_life': _halflife_wrapper,
+        'ehlers_hilbert': _ehlers_wrapper,
+        'choppiness': _chop_wrapper,
     }
 
     def __init__(self, data: pd.DataFrame):
