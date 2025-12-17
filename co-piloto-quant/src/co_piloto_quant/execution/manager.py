@@ -285,3 +285,74 @@ class ExecutionManager:
             return account_info.profit 
         return 0.0
 
+    def calculate_position_size(
+        self,
+        capital: float,
+        entry_price: float,
+        stop_loss_price: float,
+        risk_pct: float = 0.5,
+        point_value: float = 1.0
+    ) -> float:
+        """
+        Calcula o tamanho da posição usando Fixed Risk Position Sizing.
+        
+        Fórmula: N = (Capital × Risk %) / (|Entry - Stop| × Point Value)
+        
+        Esta abordagem garante que o risco máximo por trade é sempre o mesmo
+        percentual do capital, independentemente do tamanho da volatilidade.
+        
+        Args:
+            capital: Saldo atual da conta (em USD/EUR/etc)
+            entry_price: Preço de entrada da posição
+            stop_loss_price: Preço do stop loss
+            risk_pct: Percentual máximo de risco por trade (padrão 0.5%)
+            point_value: Valor de cada ponto/pip (padrão 1.0 para cálculos simples)
+            
+        Returns:
+            Tamanho da posição em lotes/unidades
+            
+        Example:
+            # Capital: $10,000, Entrada: 1.1050, Stop: 1.1000, Risco: 0.5%
+            # Perda máxima: $50 (0.5% de $10,000)
+            # Distância: 50 pips
+            # Tamanho: $50 / (50 pips × $0.10 por pip) = 10 lotes
+            
+            size = manager.calculate_position_size(
+                capital=10000,
+                entry_price=1.1050,
+                stop_loss_price=1.1000,
+                risk_pct=0.5,
+                point_value=0.10
+            )
+        """
+        if capital <= 0:
+            logger.error(f"Capital inválido: {capital}")
+            return 0.0
+        
+        if entry_price <= 0 or stop_loss_price <= 0:
+            logger.error(f"Preços inválidos: entry={entry_price}, stop={stop_loss_price}")
+            return 0.0
+        
+        if entry_price == stop_loss_price:
+            logger.error("Entry price e stop loss são iguais. Não é possível calcular posição.")
+            return 0.0
+        
+        risk_amount = capital * (risk_pct / 100.0)
+        stop_distance = abs(entry_price - stop_loss_price)
+        risk_per_unit = stop_distance * point_value
+        
+        if risk_per_unit <= 0:
+            logger.error(f"Risk per unit inválido: {risk_per_unit}")
+            return 0.0
+        
+        position_size = risk_amount / risk_per_unit
+        
+        logger.info(
+            f"Position Sizing - Capital: ${capital:.2f}, Risk: {risk_pct}%, "
+            f"Entry: {entry_price:.5f}, Stop: {stop_loss_price:.5f}, "
+            f"RiskAmount: ${risk_amount:.2f}, Distance: {stop_distance:.5f}, "
+            f"PositionSize: {position_size:.2f} unidades"
+        )
+        
+        return position_size
+
