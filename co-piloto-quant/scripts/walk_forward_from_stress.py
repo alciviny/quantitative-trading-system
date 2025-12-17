@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-lab_universal_stress.py (Versão Multi-Regime)
-Agora permite testar a estratégia em QUALQUER regime de mercado ou em TODOS simultaneamente.
-Use: python lab_universal_stress.py --regime ALL
+walk_forward_from_stress.py
+Replica o lab_universal_stress.py mas com walk-forward
+Mesmos parâmetros, mesmas regras, mesmos regimes - apenas dividido em janelas
 """
 
-from __future__ import annotations
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import argparse
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -27,23 +29,15 @@ except ImportError:
     except ImportError:
         median_abs_deviation = None
 
-# Estratégias / indicadores
-from co_piloto_quant.strategies.base import AdaptiveSniperStrategy
 from co_piloto_quant.strategies.mean_reversion import MeanReversionStrategy
-from co_piloto_quant.strategies.volatile_momentum_professional import VolatileMomentumProfessional
 from co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
 from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
 
-# --------------------------- CONFIG ---------------------------
 ML_READY_PATH = "src/co_piloto_quant/data/ml_ready"
-START_DATE = "2021-12-08"
-CUSTO_TOTAL_TRADE = 0.0006  # 0.06% round-trip
+CUSTO_TOTAL_TRADE = 0.0006
 DEFAULT_WORKERS = 4
 
-# --------------------------- LOG ---------------------------
-logger = logging.getLogger("lab_stress")
-
-# Contaminated tickers report (thread-safe)
+logger = logging.getLogger("walk_forward_stress")
 _contaminated_lock = threading.Lock()
 _contaminated: List[Dict[str, int]] = []
 
@@ -70,7 +64,6 @@ def get_parquet_files(path: str = ML_READY_PATH) -> List[Path]:
     return files
 
 
-# --------------------------- SANITY CHECK (ADAPTATIVE) ---------------------------
 def apply_sanity_check(df: pd.DataFrame, ticker: Optional[str] = None) -> Tuple[pd.DataFrame, int]:
     df = df.copy()
 
@@ -91,18 +84,16 @@ def apply_sanity_check(df: pd.DataFrame, ticker: Optional[str] = None) -> Tuple[
 
     n_suspects = int(suspect_mask.sum())
     if n_suspects > 0:
-        logger.warning("Sanity Check [%s]: %d dias suspeitos (limiar=%.3f). Interpolando close.",
-                       ticker or "unknown", n_suspects, limiar)
+        logger.warning("Sanity Check [%s]: %d dias suspeitos", ticker or "unknown", n_suspects)
         df.loc[suspect_mask, 'close'] = np.nan
         df['close'] = df['close'].interpolate(method='linear').ffill().bfill()
 
         with _contaminated_lock:
-            _contaminated.append({ 'ticker': ticker or 'unknown', 'suspects': n_suspects })
+            _contaminated.append({'ticker': ticker or 'unknown', 'suspects': n_suspects})
 
     return df, n_suspects
 
 
-# --------------------------- INDICADORES (FORÇADO) ---------------------------
 def _calculate_rolling_vol_of_vol(price_series: pd.Series, window: int = 20) -> pd.Series:
     if median_abs_deviation is None:
         return pd.Series(0.0, index=price_series.index)
@@ -113,21 +104,20 @@ def _calculate_rolling_vol_of_vol(price_series: pd.Series, window: int = 20) -> 
     vol_vol = vol_diff.rolling(window).apply(lambda x: median_abs_deviation(x[~np.isnan(x)], scale='normal'), raw=False)
     return vol_vol
 
+
 def calculate_missing_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     close_s = df['close'].ffill().bfill()
 
-    # --- HURST ---
     try:
         hurst_series = calculate_rolling_hurst(close_s, window=72, kind='returns')
         hurst_series = hurst_series.replace([np.inf, -np.inf], np.nan)
         rolling_mean_h = hurst_series.rolling(252, min_periods=1).mean()
         rolling_std_h = hurst_series.rolling(252, min_periods=1).std().replace(0, np.nan)
         df['hurst_z_72_c'] = ((hurst_series - rolling_mean_h) / rolling_std_h).fillna(0.5)
-    except Exception as e:
+    except Exception:
         df['hurst_z_72_c'] = 0.5
 
-    # --- ENTROPY ---
     try:
         entropy_series = calculate_rolling_entropy(close_s, window=20)
         entropy_series = entropy_series.replace([np.inf, -np.inf], np.nan)
@@ -136,18 +126,17 @@ def calculate_missing_indicators(df: pd.DataFrame) -> pd.DataFrame:
         rolling_mean_e = entropy_series.rolling(252, min_periods=1).mean()
         rolling_std_e = entropy_series.rolling(252, min_periods=1).std().replace(0, np.nan)
         df['Entropy_Z'] = ((entropy_series - rolling_mean_e) / rolling_std_e).fillna(0.5)
-    except Exception as e:
+    except Exception:
         df['Entropy_20'] = 0.0
         df['Entropy_Z'] = 0.5
         
-    # --- VOL_OF_VOL ---
     try:
         vol_vol_series = _calculate_rolling_vol_of_vol(close_s, window=20)
         vol_vol_series = vol_vol_series.replace([np.inf, -np.inf], np.nan)
         rolling_mean_v = vol_vol_series.rolling(252, min_periods=1).mean()
         rolling_std_v = vol_vol_series.rolling(252, min_periods=1).std().replace(0, np.nan)
         df['VolVol_Z'] = ((vol_vol_series - rolling_mean_v) / rolling_std_v).fillna(0.0)
-    except Exception as e:
+    except Exception:
         df['VolVol_Z'] = 0.0
 
     if 'entropy_z_20' in df.columns:
@@ -163,7 +152,7 @@ def classify_regimes(df: pd.DataFrame) -> pd.DataFrame:
     df['trend_signal'] = np.where(df['close'] > df['mm200_lab'], 'BULL', 'BEAR')
 
     distancia_mm = (df['close'] - df['mm200_lab']).abs() / df['mm200_lab']
-    df.loc[distancia_mm < 0.03, 'trend_signal'] = 'SIDEWAYS' # Zona neutra de 3%
+    df.loc[distancia_mm < 0.03, 'trend_signal'] = 'SIDEWAYS'
 
     df['vol_20_lab'] = df['close'].rolling(20, min_periods=1).std() / df['close']
     vol_threshold = df['vol_20_lab'].rolling(252, min_periods=1).quantile(0.70)
@@ -189,8 +178,7 @@ def _build_rename_map(columns: List[str]) -> Dict[str, str]:
     return rename_map
 
 
-# --------------------------- SIMULAÇÃO & SANITY-TRADE ---------------------------
-def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, target_regime: str = 'ALL', close_open_trades: bool = True) -> pd.DataFrame:
+def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, close_open_trades: bool = True) -> pd.DataFrame:
     try:
         df_eval = strategy.evaluate(df.copy(), ticker)
     except Exception as e:
@@ -209,7 +197,6 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, target_regi
     
     lows = df_eval['low'].values if 'low' in df_eval.columns else closes
 
-    # Extração segura de indicadores para análise
     rsi_vals = np.full(len(df_eval), 50.0)
     bb_mid_vals = np.full(len(df_eval), 0.0)
     hurst_vals = np.full(len(df_eval), 0.5)
@@ -225,7 +212,6 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, target_regi
     for c in df_eval.columns:
         if 'entropy' in c.lower() and 'z' in c.lower(): entropy_vals = df_eval[c].fillna(0.0).values; break
     
-    # Tenta pegar half-life (pode vir com varios nomes)
     for c in ['half_life', 'half_life_60', 'HalfLife_60']:
         if c in df_eval.columns:
             half_life_vals = df_eval[c].fillna(0).values
@@ -257,10 +243,6 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, target_regi
             if cooldown_until and dates[i] < cooldown_until:
                 continue
             
-            # --- FILTRO DE REGIME DO LAB (AGORA FLEXÍVEL) ---
-            if target_regime != 'ALL' and today_regime != target_regime:
-                continue 
-            
             in_trade = True
             entry_price = float(closes[i])
             entry_date = dates[i]
@@ -284,7 +266,6 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, target_regi
             
             highest_price = max(highest_price, current_close)
             
-            # Trailing Stop Lógico
             if highest_price >= entry_price * 1.08:
                 current_technical_stop = max(current_technical_stop, entry_price * 1.01)
             
@@ -306,7 +287,6 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, target_regi
                 triggered = True
 
             elif not triggered and 'BEAR' in entry_regime:
-                 # Saída mais agressiva em regimes de baixa
                 if (rsi_vals[i] > 50) or (bb_mid_vals[i] > 0 and current_close >= bb_mid_vals[i]):
                     exit_price = current_close
                     reason = 'BEAR_OPTIMIZED'
@@ -330,7 +310,7 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, target_regi
                     'days_held': days_held,
                     'hurst_entrada': float(hurst_vals[entry_idx]),
                     'entropy_entrada': float(entropy_vals[entry_idx]),
-                    'halflife_entrada': float(half_life_vals[entry_idx]), # Nova métrica
+                    'halflife_entrada': float(half_life_vals[entry_idx]),
                     'sinal_tipo': 'PRICE'
                 })
                 
@@ -359,7 +339,8 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, target_regi
     return pd.DataFrame(trades)
 
 
-def process_file(file_path: Path, strategy, start_date: str, target_regime: str, close_open_trades: bool) -> pd.DataFrame:
+def process_file_in_window(file_path: Path, strategy, train_start, train_end, test_start, test_end) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Processa um arquivo para treino E teste"""
     try:
         ticker = file_path.stem.replace('_', '.')
         df = pd.read_parquet(file_path)
@@ -377,170 +358,190 @@ def process_file(file_path: Path, strategy, start_date: str, target_regime: str,
             df.rename(columns=rename_map, inplace=True)
 
         df = calculate_missing_indicators(df)
-        df = df[df.index >= pd.to_datetime(start_date)].copy()
-
-        if df.empty: return pd.DataFrame()
-
         df = classify_regimes(df)
         df['REGIME'] = df['REGIME'].astype(str)
 
-        # Passa o regime alvo para a simulação
-        df_trades = run_strategy_simulation(df, strategy, ticker, target_regime=target_regime, close_open_trades=close_open_trades)
+        # Converte para Timestamp se necessário
+        train_start = pd.Timestamp(train_start)
+        train_end = pd.Timestamp(train_end)
+        test_start = pd.Timestamp(test_start)
+        test_end = pd.Timestamp(test_end)
+        
+        # Filtra dados do período de treino
+        df_train_ticker = df[(df.index >= train_start) & (df.index <= train_end)].copy()
+        
+        # Filtra dados do período de teste
+        df_test_ticker = df[(df.index >= test_start) & (df.index <= test_end)].copy()
 
-        if not df_trades.empty:
-            logger.info('%s: %d trades (suspects=%d)', ticker, len(df_trades), n_suspects)
+        trades_train = pd.DataFrame()
+        trades_test = pd.DataFrame()
 
-        return df_trades
+        if not df_train_ticker.empty:
+            trades_train = run_strategy_simulation(df_train_ticker, strategy, ticker, close_open_trades=True)
+            if not trades_train.empty:
+                trades_train['phase'] = 'TRAIN'
+
+        if not df_test_ticker.empty:
+            trades_test = run_strategy_simulation(df_test_ticker, strategy, ticker, close_open_trades=True)
+            if not trades_test.empty:
+                trades_test['phase'] = 'TEST'
+
+        return trades_train, trades_test
 
     except Exception as e:
         logger.exception('Erro processando %s: %s', file_path.name, e)
-        return pd.DataFrame()
-
-
-def analise_tecnica_detalhada(final_df: pd.DataFrame) -> None:
-    print('\n' + '═' * 60)
-    print('🔬 ANÁLISE TÉCNICA DETALHADA - LABORATÓRIO (Definitivo)')
-    print('═' * 60)
-
-    wins = final_df[final_df['win'] == 1]
-    losses = final_df[final_df['win'] == 0]
-
-    print('\n  HURST ANALYSIS:')
-    print(f"  Hurst (Wins):   Média={wins['hurst_entrada'].mean():.3f}, Std={wins['hurst_entrada'].std():.3f}")
-    if not losses.empty:
-        print(f"  Hurst (Losses): Média={losses['hurst_entrada'].mean():.3f}, Std={losses['hurst_entrada'].std():.3f}")
-
-    print('\n  ENTROPY ANALYSIS:')
-    if not wins.empty:
-        print(f"  Entropy (Wins):   Média={wins['entropy_entrada'].mean():.3f}, Std={wins['entropy_entrada'].std():.3f}")
-    if not losses.empty:
-        print(f"  Entropy (Losses): Média={losses['entropy_entrada'].mean():.3f}, Std={losses['entropy_entrada'].std():.3f}")
-
-    print('\n  HALF-LIFE ANALYSIS:')
-    if 'halflife_entrada' in wins.columns and not wins.empty:
-        print(f"  Half-Life (Wins):   Média={wins['halflife_entrada'].mean():.2f}, Std={wins['halflife_entrada'].std():.2f}")
-    if 'halflife_entrada' in losses.columns and not losses.empty:
-        print(f"  Half-Life (Losses): Média={losses['halflife_entrada'].mean():.2f}, Std={losses['halflife_entrada'].std():.2f}")
-
-    print('\n  PROFITABILITY METRICS:')
-    ganhos = final_df[final_df['return'] > 0]['return'].sum()
-    perdas = abs(final_df[final_df['return'] < 0]['return'].sum())
-    profit_factor = ganhos / perdas if perdas > 0 else float('inf') if ganhos > 0 else 0.0
-    print(f"  Total Ganhos:    {ganhos:>8.4f} ({ganhos*100:.2f}%)")
-    print(f"  Total Perdas:    {perdas:>8.4f} ({perdas*100:.2f}%)")
-    print(f"  Profit Factor:   {profit_factor:.2f}x")
-
-    print('\n  ANÁLISE DE DRAWDOWN:')
-    final_df_sorted = final_df.sort_index() if isinstance(final_df.index, pd.DatetimeIndex) else final_df
-    retorno_cumulativo = (1 + final_df_sorted['return']).cumprod()
-    drawdown = (retorno_cumulativo.cummax() - retorno_cumulativo) / retorno_cumulativo.cummax()
-    print(f"  Max Drawdown:    {drawdown.max()*100:>6.2f}%")
-
-    print('\n  PERFORMANCE POR REGIME (DETALHADO):')
-    regime_detalhado = final_df.groupby('regime').agg({
-        'return': ['count', 'mean', 'sum'],
-        'win': 'mean',
-        'halflife_entrada': 'mean',
-        'days_held': 'mean'
-    }).round(4)
-    regime_detalhado.columns = ['Trades', 'Avg_Return', 'Total_Return', 'WinRate', 'HalfLife', 'Days']
-    # Ordena por Retorno Total para ver onde está o dinheiro
-    print(regime_detalhado.sort_values('Total_Return', ascending=False))
-
-
-def save_sanity_report(path: Path) -> None:
-    if not _contaminated:
-        logger.info('Nenhum ticker contaminado detectado.')
-        return
-    df = pd.DataFrame(_contaminated)
-    df_agg = df.groupby('ticker')['suspects'].sum().reset_index()
-    df_agg.to_csv(path, index=False)
-    logger.info('Sanity report salvo em %s', path)
+        return pd.DataFrame(), pd.DataFrame()
 
 
 def main():
     setup_logging()
-    parser = argparse.ArgumentParser(description='Stress Test - Lab Multi-Regime')
+    parser = argparse.ArgumentParser(description='Walk-Forward com mesmos parâmetros do stress test')
     
-    # --- NOVO ARGUMENTO DE REGIME ---
-    parser.add_argument('--regime', type=str, default='ALL', 
-                        help='Regime alvo para teste (ex: BULL_CALM, SIDEWAYS_CALM, BEAR_VOLATILE, ALL)')
-    
-    parser.add_argument('--strategy', choices=['mean-reversion', 'adaptive-sniper', 'volatile-momentum'], default='mean-reversion')
-    parser.add_argument('--start-date', type=str, default=START_DATE)
-
-    # Parametros Mean Reversion
-    mean_rev_group = parser.add_argument_group('Mean Reversion')
-    mean_rev_group.add_argument('--bb-std', type=float, default=1.5)
-    mean_rev_group.add_argument('--rsi-period', type=int, default=120)
-    
-    # Parametros Adaptativos
-    adaptive_group = parser.add_argument_group('Adaptive Mean Reversion')
-    adaptive_group.add_argument('--disable-adaptive-rsi', action='store_true')
-    adaptive_group.add_argument('--disable-adaptive-bb', action='store_true')
-    adaptive_group.add_argument('--disable-regime-filter', action='store_true')
-    adaptive_group.add_argument('--bb-std-volatile', type=float, default=2.5)
-    
-    # Novo parâmetro Half-Life exposto
-    adaptive_group.add_argument('--max-half-life', type=int, default=25, help='Filtro de elasticidade (Half-Life máximo)')
-
-    exec_group = parser.add_argument_group('Execution')
-    exec_group.add_argument('--out', type=str, default=None)
-    exec_group.add_argument('--workers', type=int, default=DEFAULT_WORKERS)
-    exec_group.add_argument('--close-open-trades', action='store_true')
+    parser.add_argument('--bb-std', type=float, default=1.5)
+    parser.add_argument('--rsi-period', type=int, default=120)
+    parser.add_argument('--bb-std-volatile', type=float, default=2.5)
+    parser.add_argument('--max-half-life', type=int, default=25)
+    parser.add_argument('--workers', type=int, default=DEFAULT_WORKERS)
+    parser.add_argument('--out', type=str, default='walk_forward_results.csv')
 
     args = parser.parse_args()
-    files = get_parquet_files()
-
-    if args.strategy == 'mean-reversion':
-        strategy = MeanReversionStrategy(
-            bb_std_dev=args.bb_std, 
-            rsi_period=args.rsi_period,
-            bb_std_dev_volatile=args.bb_std_volatile,
-            adaptive_rsi=not args.disable_adaptive_rsi,
-            adaptive_bb=not args.disable_adaptive_bb,
-            use_regime_filter=not args.disable_regime_filter,
-            max_half_life=args.max_half_life # Passando o novo parametro
-        )
-    elif args.strategy == 'volatile-momentum':
-        strategy = VolatileMomentumProfessional(
-            ema_fast=12,
-            ema_slow=26,
-            atr_stop_multiplier=2.5,
-            atr_profit_multiplier=3.0,
-            target_regimes=['BULL_VOLATILE', 'BEAR_VOLATILE'] if args.regime == 'ALL' else [args.regime]
-        )
-    else:
-        strategy = AdaptiveSniperStrategy()
+    
+    strategy = MeanReversionStrategy(
+        bb_std_dev=args.bb_std, 
+        rsi_period=args.rsi_period,
+        bb_std_dev_volatile=args.bb_std_volatile,
+        adaptive_rsi=True,
+        adaptive_bb=True,
+        use_regime_filter=True,
+        max_half_life=args.max_half_life
+    )
 
     logger.info('Estratégia: %s', strategy.get_name())
-    logger.info('Testando Regime: %s', args.regime)
+
+    files = get_parquet_files()
+    if not files:
+        logger.error("Nenhum arquivo encontrado")
+        return
+
+    # Determina períodos
+    logger.info('Determinando períodos disponíveis...')
+    df_sample = pd.read_parquet(files[0])
+    if 'data_pregao' in df_sample.columns:
+        all_dates = pd.to_datetime(df_sample['data_pregao'])
+    else:
+        all_dates = pd.to_datetime(df_sample.index, errors='coerce')
+    
+    min_date = pd.Timestamp(all_dates.min())
+    max_date = pd.Timestamp(all_dates.max())
+    logger.info('Período: %s a %s', min_date.date(), max_date.date())
+    
+    # Gera janelas
+    windows = []
+    current = pd.Timestamp(min_date)
+    
+    while True:
+        # Adiciona 6 meses para treino
+        year, month = current.year, current.month
+        train_month = month + 6
+        train_year = year + (train_month - 1) // 12
+        train_month = (train_month - 1) % 12 + 1
+        train_end = pd.Timestamp(year=train_year, month=train_month, day=1) - pd.Timedelta(days=1)
+        
+        # Calcula fim do teste (3 meses depois do treino)
+        test_month = train_month + 3
+        test_year = train_year + (test_month - 1) // 12
+        test_month = (test_month - 1) % 12 + 1
+        test_end = pd.Timestamp(year=test_year, month=test_month, day=1) - pd.Timedelta(days=1)
+        
+        test_start = train_end + pd.Timedelta(days=1)
+        
+        if test_end > max_date:
+            break
+        
+        train_idx = all_dates[(all_dates >= current) & (all_dates <= train_end)]
+        test_idx = all_dates[(all_dates > train_end) & (all_dates <= test_end)]
+        
+        if len(train_idx) > 0 and len(test_idx) > 0:
+            windows.append({
+                'name': f"{current.strftime('%Y-%m')}",
+                'train_start': pd.Timestamp(current),
+                'train_end': pd.Timestamp(train_end),
+                'test_start': pd.Timestamp(test_start),
+                'test_end': pd.Timestamp(test_end)
+            })
+        
+        # Avança 1 mês
+        next_month = current.month + 1
+        next_year = current.year + (next_month - 1) // 12
+        next_month = (next_month - 1) % 12 + 1
+        current = pd.Timestamp(year=next_year, month=next_month, day=current.day if current.day <= 28 else 28)
+    
+    logger.info('Geradas %d janelas', len(windows))
 
     all_trades = []
     
-    with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futures = {ex.submit(process_file, fp, strategy, args.start_date, args.regime, args.close_open_trades): fp for fp in files}
-        for f in tqdm(as_completed(futures), total=len(futures), desc='Arquivos'):
-            res = f.result()
-            if isinstance(res, pd.DataFrame) and not res.empty:
-                all_trades.append(res)
+    for w_idx, window in enumerate(windows, 1):
+        logger.info(f'\n[{w_idx}/{len(windows)}] Janela: {window["name"]}')
+        logger.info(f'  Treino: {window["train_start"].date()} a {window["train_end"].date()}')
+        logger.info(f'  Teste:  {window["test_start"].date()} a {window["test_end"].date()}')
+        
+        window_trades = []
+        
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            futures = {ex.submit(process_file_in_window, fp, strategy, window['train_start'], window['train_end'], window['test_start'], window['test_end']): fp for fp in files}
+            
+            for f in tqdm(as_completed(futures), total=len(futures), desc=f'Janela {window["name"]}'):
+                trades_train, trades_test = f.result()
+                if isinstance(trades_train, pd.DataFrame) and not trades_train.empty:
+                    trades_train['window'] = window['name']
+                    window_trades.append(trades_train)
+                if isinstance(trades_test, pd.DataFrame) and not trades_test.empty:
+                    trades_test['window'] = window['name']
+                    window_trades.append(trades_test)
+        
+        all_trades.extend(window_trades)
 
     if all_trades:
         final_df = pd.concat(all_trades, ignore_index=True)
 
-        print('\n' + '=' * 60)
-        print('🏁 RESULTADOS GERAIS DO STRESS TEST - LABORATÓRIO (Definitivo)')
-        print('=' * 60)
+        print('\n' + '=' * 70)
+        print('🔄 WALK-FORWARD VALIDATION RESULTS')
+        print('=' * 70)
 
-        # Resumo Simples
-        regime_stats = final_df.groupby('regime')['return'].agg(['count', 'mean'])
-        regime_stats['win_rate'] = final_df.groupby('regime')['return'].apply(lambda x: (x > 0).mean())
-        print(regime_stats.sort_values('mean', ascending=False))
+        # Por fase
+        print('\n📈 PERFORMANCE POR FASE:')
+        for phase in ['TRAIN', 'TEST']:
+            phase_df = final_df[final_df['phase'] == phase]
+            if not phase_df.empty:
+                avg = phase_df['return'].mean()
+                wr = (phase_df['return'] > 0).mean()
+                cnt = len(phase_df)
+                print(f'  {phase:6} | {cnt:4} trades | {avg:8.4f} retorno | {wr:6.1%} win_rate')
 
-        analise_tecnica_detalhada(final_df)
-        save_sanity_report(Path('sanity_report.csv'))
+        # Degradação
+        train_avg = final_df[final_df['phase'] == 'TRAIN']['return'].mean()
+        test_avg = final_df[final_df['phase'] == 'TEST']['return'].mean()
+        
+        if train_avg != 0:
+            deg = ((test_avg - train_avg) / abs(train_avg)) * 100
+        else:
+            deg = 0
+
+        print(f'\n⚠️  DEGRADAÇÃO GERAL: {deg:.2f}%')
+        
+        if abs(deg) < 20:
+            print('  ✅ Sistema CONSISTENTE')
+        elif abs(deg) < 50:
+            print('  ⚠️  Degradação MODERADA')
+        else:
+            print('  ❌ Sistema OVERFITTED')
+
+        # Salva
+        final_df.to_csv(args.out, index=False)
+        logger.info('Resultados salvos em %s', args.out)
     else:
-        logger.warning('Nenhum trade gerado para o regime %s.', args.regime)
+        logger.warning('Nenhum trade gerado')
+
 
 if __name__ == '__main__':
     main()
