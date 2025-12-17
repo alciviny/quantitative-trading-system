@@ -5,88 +5,89 @@ import numpy as np
 from tqdm import tqdm
 import logging
 
-# Configuração de Path e Logs
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
-# Importações do seu projeto
 from src.co_piloto_quant.data.data_fetching import fetch_data
-from src.co_piloto_quant.analysis import calculate_indicators
 from src.co_piloto_quant.utils import get_b3_tickers
+# SUBSTITUIÇÃO: Sai analysis.py, entra IndicatorEngine e Math Tools
+from src.co_piloto_quant.data.indicator_engine import IndicatorEngine
+from src.co_piloto_quant.utils.math_tools import calculate_z_score
+from src.co_piloto_quant.indicators.names import IndicatorNames
 
-# Configurações
-LOOKBACK_WINDOW = 252  # 1 Ano de aprendizado para a média
-MIN_HISTORY = 300      # Precisa ter pelo menos isso de dados
+LOOKBACK_WINDOW = 252
+MIN_HISTORY = 300
 
 def analyze_asset_dna(ticker):
-    """
-    Baixa dados e extrai o DNA estatístico do ativo.
-    """
     try:
-        # 1. Baixa 2 anos de dados
-        # auto_adjust=True ajuda a pegar preços ajustados por dividendos/splits
+        # 1. Baixa dados
         df = fetch_data(ticker, period="2y", interval="1d")
-        
-        if df.empty or len(df) < MIN_HISTORY:
-            return None
+        if df.empty or len(df) < MIN_HISTORY: return None
 
-        # --- CORREÇÃO DE COLUNAS (O PULO DO GATO) ---
-        # O yfinance devolve 'Close', mas o analysis.py quer 'close'.
-        # Também removemos MultiIndex se houver.
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
+        # Limpeza básica
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         df.columns = [col.lower() for col in df.columns]
-        
-        # Garante que temos 'close' (as vezes vem como 'adj close')
-        if 'adj close' in df.columns and 'close' not in df.columns:
-            df.rename(columns={'adj close': 'close'}, inplace=True)
-            
-        # ---------------------------------------------
+        if 'adj close' in df.columns: df.rename(columns={'adj close': 'close'}, inplace=True)
 
-        # 2. Calcula Indicadores e Z-Scores
-        # O analysis.py agora vai encontrar a coluna 'close' e funcionar!
-        df_calc = calculate_indicators(df)
+        # 2. O "Novo Jeito" com IndicatorEngine
+        engine = IndicatorEngine(df)
+        engine.add_indicator('entropy', window=20)
+        engine.add_indicator('hurst', window=72, kind='returns') # Usando returns para ficar igual ao analysis
+        engine.add_indicator('half_life', window=60) # <--- Seu novo Half-Life aqui
         
-        # Se o cálculo falhou (retornou vazio ou sem as colunas Z), ignora
-        if df_calc.empty or 'Entropy_Z' not in df_calc.columns:
-            return None
+        df_calc = engine.get_data()
 
-        last = df_calc.iloc[-1]
+        # 3. Cálculo Manual de Métricas Específicas (Volatilidade e Z-Scores)
+        # O analysis.py fazia isso "escondido", agora fazemos explicitamente:
         
-        # 3. Extrai o Perfil (DNA)
+        # Volatilidade (Rolling Std de 20 dias)
+        df_calc['vol_20'] = df_calc['close'].pct_change().rolling(20).std()
+        
+        # Volatilidade da Volatilidade (Simplificada para o DNA)
+        vol_of_vol = df_calc['vol_20'].rolling(20).std()
+        
+        # Z-Scores (Essenciais para o DNA)
+        # Precisamos dos nomes corretos que o IndicatorEngine gerou
+        entropy_col = IndicatorNames.entropy(20)
+        hurst_col = IndicatorNames.hurst(72, 'returns')
+        
+        if entropy_col not in df_calc.columns: return None
+
+        # Calcula Z-Scores usando janela de aprendizado (252 dias)
+        entropy_z = calculate_z_score(df_calc[entropy_col], window=LOOKBACK_WINDOW).iloc[-1]
+        hurst_z = calculate_z_score(df_calc[hurst_col], window=LOOKBACK_WINDOW).iloc[-1] if hurst_col in df_calc.columns else 0
+        volvol_z = calculate_z_score(vol_of_vol, window=LOOKBACK_WINDOW).iloc[-1]
+        
+        # Pega o Half-Life atual (coluna gerada pelo engine)
+        hl_col = 'half_life_60' # Nome padrão do seu script half_life.py
+        current_hl = df_calc[hl_col].iloc[-1] if hl_col in df_calc.columns else 999
+
+        # 4. Monta o DNA
         dna = {
             'Ticker': ticker,
-            'Preco': last['close'],
-            
-            # ENTROPIA (Ruído)
-            'Entropy_Atual': last['Entropy_20'],
-            'Entropy_Media': df_calc['Entropy_20'].rolling(LOOKBACK_WINDOW).mean().iloc[-1],
-            'Entropy_Z': last.get('Entropy_Z', 0),
-            
-            # VOLATILIDADE (Risco)
-            'Vol_Diaria_Atual': df_calc['close'].pct_change().rolling(20).std().iloc[-1] * 100,
-            'VolVol_Z': last.get('VolVol_Z', 0),
-            
-            # TENDÊNCIA (Hurst)
-            'Hurst_Z': last.get('Hurst_Z', 0),
-            
-            # DIAGNÓSTICO FINAL
+            'Preco': df_calc['close'].iloc[-1],
+            'Entropy_Z': entropy_z,
+            'Hurst_Z': hurst_z,
+            'VolVol_Z': volvol_z,
+            'HalfLife': current_hl, # <--- Nova métrica no relatório!
             'Estado': 'NORMAL'
         }
-        
-        # Define o rótulo do estado atual baseada no Z-Score
-        if dna['Entropy_Z'] > 2.0:
-            dna['Estado'] = 'CAÓTICO (Perigo)'
-        elif dna['Entropy_Z'] < -1.5:
-            dna['Estado'] = 'ESTÁVEL (Oportunidade)'
+
+        # Classificação baseada no novo Risk Regime
+        if dna['Entropy_Z'] > 2.0 or dna['VolVol_Z'] > 3.0:
+            dna['Estado'] = 'TÓXICO (Ficar Fora)'
+        elif dna['HalfLife'] < 25 and dna['Hurst_Z'] < -1.0:
+            dna['Estado'] = 'REVERSÃO (Sniper)'
+        elif dna['Hurst_Z'] > 1.0:
+            dna['Estado'] = 'TENDÊNCIA'
             
         return dna
 
     except Exception as e:
-        # logger.error(f"Erro em {ticker}: {e}")
+        # logger.error(f"Erro {ticker}: {e}")
         return None
+
 
 def build_market_dna():
     print("\n🧬 --- INICIANDO MAPEAMENTO DE DNA DA B3 (CORRIGIDO) ---")

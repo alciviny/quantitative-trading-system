@@ -40,6 +40,7 @@ from co_piloto_quant.strategies.base import AdaptiveSniperStrategy
 from co_piloto_quant.strategies.mean_reversion import MeanReversionStrategy
 from co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
 from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
+from co_piloto_quant.data.indicator_engine import IndicatorEngine
 
 # --------------------------- CONFIG ---------------------------
 ML_READY_PATH = "src/co_piloto_quant/data/ml_ready"
@@ -266,6 +267,7 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, close_open_
     bb_mid_vals = np.full(len(df_eval), 0.0)
     hurst_vals = np.full(len(df_eval), 0.5)
     entropy_vals = np.full(len(df_eval), 0.0)
+    half_life_vals = np.full(len(df_eval), -1.0)
 
     for c in df_eval.columns:
         if 'rsi' in c.lower() or 'ifr' in c.lower():
@@ -286,6 +288,9 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, close_open_
         if 'entropy' in c.lower() and 'z' in c.lower():
             entropy_vals = df_eval[c].fillna(0.0).values
             break
+
+    if 'HalfLife_60' in df_eval.columns:
+        half_life_vals = df_eval['HalfLife_60'].fillna(-1).values
 
     has_stop = 'STOP_LOSS' in df_eval.columns
     stops_col = df_eval['STOP_LOSS'].values if has_stop else np.full(len(df_eval), np.nan)
@@ -383,6 +388,7 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, close_open_
                     'days_held': days_held,
                     'hurst_entrada': float(hurst_vals[entry_idx]),
                     'entropy_entrada': float(entropy_vals[entry_idx]),
+                    'halflife_entrada': float(half_life_vals[entry_idx]),
                     'sinal_tipo': 'PRICE'
                 })
                 
@@ -404,6 +410,7 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, close_open_
             'days_held': (dates[-1] - entry_date).days,
             'hurst_entrada': float(hurst_vals[entry_idx]),
             'entropy_entrada': float(entropy_vals[entry_idx]),
+            'halflife_entrada': float(half_life_vals[entry_idx]),
             'sinal_tipo': 'PRICE'
         })
 
@@ -424,6 +431,22 @@ def process_file(file_path: Path, strategy, start_date: str, close_open_trades: 
 
         # 1. Aplica Sanity Check (Remove Splits/Gaps irreais)
         df, n_suspects = apply_sanity_check(df, ticker=ticker)
+
+        # 1.5 Calcula os indicadores da Estratégia de Confluência
+        try:
+            engine = IndicatorEngine(df)
+            # Adiciona os indicadores necessários para o novo filtro de regime
+            engine.add_indicator('half_life', window=60)
+            engine.add_indicator('choppiness', window=14)
+            engine.add_indicator('ehlers_hilbert')
+            
+            df = engine.get_data()
+            
+            # Renomeia a coluna half_life para o nome legado que a estratégia pode esperar
+            if 'half_life' in df.columns:
+                df.rename(columns={'half_life': 'HalfLife_60'}, inplace=True)
+        except Exception as e:
+            logger.warning("Falha ao calcular indicadores de confluência para %s: %s", ticker, e)
 
         # 2. Renomeia Colunas
         rename_map = _build_rename_map(list(df.columns))
@@ -479,6 +502,13 @@ def analise_tecnica_detalhada(final_df: pd.DataFrame) -> None:
         print(f"  Entropy (Losses): Média={losses['entropy_entrada'].mean():.3f}, Std={losses['entropy_entrada'].std():.3f}")
 
     print('\n')
+    print('  HALF-LIFE ANALYSIS:')
+    if not wins.empty:
+        print(f"  Half-Life (Wins):   Média={wins['halflife_entrada'].mean():.2f}, Std={wins['halflife_entrada'].std():.2f}")
+    if not losses.empty:
+        print(f"  Half-Life (Losses): Média={losses['halflife_entrada'].mean():.2f}, Std={losses['halflife_entrada'].std():.2f}")
+
+    print('\n')
     print('  SINAL TYPE ANALYSIS:')
     sinal_stats = final_df.groupby('sinal_tipo').agg({'return': ['count', 'mean'], 'win': 'mean'}).round(4)
     print(sinal_stats)
@@ -522,9 +552,10 @@ def analise_tecnica_detalhada(final_df: pd.DataFrame) -> None:
         'win': 'mean',
         'hurst_entrada': 'mean',
         'entropy_entrada': 'mean',
+        'halflife_entrada': 'mean',
         'days_held': 'mean'
     }).round(4)
-    regime_detalhado.columns = ['Total', 'Return', 'Std', 'WinRate', 'Hurst_Med', 'Entropy_Med', 'Days']
+    regime_detalhado.columns = ['Total', 'Return', 'Std', 'WinRate', 'Hurst_Med', 'Entropy_Med', 'HalfLife_Med', 'Days']
     print(regime_detalhado.sort_values('Return', ascending=False))
 
 
@@ -551,6 +582,7 @@ def main():
     mean_rev_group = parser.add_argument_group('Mean Reversion')
     mean_rev_group.add_argument('--bb-std', type=float, default=1.5, help='Desvio padrão base para Bollinger Bands.')
     mean_rev_group.add_argument('--rsi-period', type=int, default=120, help='Período do RSI.')
+    mean_rev_group.add_argument('--max-half-life', type=int, default=25, help='Half-Life máximo para filtro de reversão à média.')
     
     # --- Parâmetros Adaptativos (Mean Reversion) ---
     adaptive_group = parser.add_argument_group('Adaptive Mean Reversion')
@@ -584,6 +616,7 @@ def main():
         strategy = MeanReversionStrategy(
             bb_std_dev=args.bb_std, 
             rsi_period=args.rsi_period,
+            max_half_life=args.max_half_life,
             bb_std_dev_volatile=args.bb_std_volatile,
             adaptive_rsi=not args.disable_adaptive_rsi,
             adaptive_bb=not args.disable_adaptive_bb,
