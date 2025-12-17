@@ -4,19 +4,6 @@ from co_piloto_quant.strategies.base import Strategy
 from co_piloto_quant.config import BB_PERIOD
 
 class MeanReversionStrategy(Strategy):
-    """
-    Estratégia de Mean Reversion (Reversão à Média) com parâmetros dinâmicos e filtro de regime.
-    
-    Lógica Adaptativa:
-    - FILTRO: Proíbe compras se o regime de mercado for "tóxico" (alta volatilidade/entropia).
-    - COMPRA:
-        - RSI abaixo de um limiar dinâmico (percentil histórico).
-        - OU Preço toca uma Banda de Bollinger que se alarga com a volatilidade.
-    - VENDA:
-        - RSI acima de um limiar dinâmico (percentil histórico).
-        - OU Preço toca a banda superior.
-    """
-    
     def __init__(self, 
                  bb_std_dev: float = 1.5,
                  bb_std_dev_volatile: float = 2.5,
@@ -24,49 +11,36 @@ class MeanReversionStrategy(Strategy):
                  adaptive_rsi: bool = True,
                  adaptive_bb: bool = True,
                  use_regime_filter: bool = True,
-                 max_half_life: int = 25,  # <--- NOVO PARÂMETRO (Default: 25 dias)
+                 max_half_life: int = 25,
+                 only_bull_market: bool = True, # <--- NOVO: Trava de segurança Bear Market
                  rsi_buy_percentile: float = 0.1,
                  rsi_sell_percentile: float = 0.9,
-                 adaptive_window: int = 126, # Aprox. 6 meses
+                 adaptive_window: int = 126,
                  save_logs: bool = False):
-        """
-        Args:
-            bb_std_dev: Desvio padrão base das Bandas de Bollinger.
-            bb_std_dev_volatile: Desvio padrão em regimes de alta volatilidade.
-            rsi_period: Período do RSI.
-            adaptive_rsi: Se True, usa limiares de RSI baseados em percentil.
-            adaptive_bb: Se True, alarga as bandas com a volatilidade.
-            use_regime_filter: Se True, proíbe compras em regimes de mercado tóxicos.
-            max_half_life: Limite máximo para o half-life de um ativo ser considerado em reversão à média.
-            rsi_buy_percentile: Percentil para o limiar de compra do RSI.
-            rsi_sell_percentile: Percentil para o limiar de venda do RSI.
-            adaptive_window: Janela (dias) para calcular os parâmetros adaptativos.
-            save_logs: Se True, salva snapshots da estratégia.
-        """
+        
         super().__init__(save_logs=save_logs)
+        # ... (atribuições anteriores) ...
         self.bb_std_dev = bb_std_dev
         self.bb_std_dev_volatile = bb_std_dev_volatile
         self.rsi_period = rsi_period
         self.adaptive_rsi = adaptive_rsi
         self.adaptive_bb = adaptive_bb
         self.use_regime_filter = use_regime_filter
-        self.max_half_life = max_half_life # Guarda o valor na classe
+        self.max_half_life = max_half_life
+        self.only_bull_market = only_bull_market # Guarda a config
         self.rsi_buy_percentile = rsi_buy_percentile
         self.rsi_sell_percentile = rsi_sell_percentile
         self.adaptive_window = adaptive_window
     
     def get_name(self) -> str:
-        adaptive_str = "Adaptive" if self.adaptive_bb or self.adaptive_rsi else "Fixed"
-        filter_str = "+RegimeFilter" if self.use_regime_filter else ""
-        return f"MeanReversion_{adaptive_str}{filter_str}"
+        trend_str = "+BullOnly" if self.only_bull_market else ""
+        return f"MeanReversion_Adaptive{trend_str}"
     
     def _calculate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calcula sinais baseado na reversão à média com parâmetros adaptativos e filtro de regime."""
-        
         df = df.copy()
-        col_rsi = f"rsi_{self.rsi_period}"
         
-        # --- 1. Limiares de RSI (Adaptativo ou Fixo) ---
+        # ... (Cálculos de RSI e Bandas mantidos iguais) ...
+        col_rsi = f"rsi_{self.rsi_period}"
         if self.adaptive_rsi and col_rsi in df.columns:
             rsi_buy_thresh = df[col_rsi].rolling(self.adaptive_window, min_periods=30).quantile(self.rsi_buy_percentile)
             rsi_sell_thresh = df[col_rsi].rolling(self.adaptive_window, min_periods=30).quantile(self.rsi_sell_percentile)
@@ -78,7 +52,6 @@ class MeanReversionStrategy(Strategy):
             rsi_low = df[col_rsi] < 40
             rsi_high = df[col_rsi] > 60
 
-        # --- 2. Bandas de Bollinger (Adaptativa ou Fixa) ---
         middle_band = df['close'].rolling(window=BB_PERIOD).mean()
         rolling_std = df['close'].rolling(window=BB_PERIOD).std()
 
@@ -90,42 +63,40 @@ class MeanReversionStrategy(Strategy):
         lower_band = middle_band - (current_std * rolling_std)
         upper_band = middle_band + (current_std * rolling_std)
         
-        # --- 3. Lógica de Compra e Venda ---
+        # Sinais Base
         price_at_lower = df['close'] <= lower_band
         price_at_upper = df['close'] >= upper_band
-        
         buy_signal = price_at_lower | rsi_low
         sell_signal = price_at_upper | rsi_high
         
-        # --- 4. FILTRO DE REGIME (ATUALIZADO - Lógica Goldilocks) ---
+        # --- FILTRO 1: TENDÊNCIA MACRO (Correção do Vazamento) ---
+        if self.only_bull_market:
+            # min_periods=1 garante que temos média desde o começo, igual ao Lab
+            mm200 = df['close'].rolling(200, min_periods=1).mean()
+            
+            # Se não tiver dado suficiente (ex: dia 1), assume BEAR por segurança
+            mm200.fillna(np.inf, inplace=True) 
+            
+            # Só permite compra se Preço > MA200
+            is_bear = df['close'] < mm200
+            buy_signal[is_bear] = False
+
+        # --- FILTRO 2: REGIME DE QUALIDADE (Entropy, Vol, Half-Life) ---
         if self.use_regime_filter:
             is_toxic = pd.Series(False, index=df.index)
 
-            # --- PROTEÇÃO SUPERIOR (Contra Crises) ---
-            if 'Entropy_20' in df.columns:
-                is_toxic |= (df['Entropy_20'] > 3.2) # Teto Absoluto
-            
-            if 'VolVol_Z' in df.columns:
-                is_toxic |= (df['VolVol_Z'] > 3.0) # Instabilidade
+            if 'Entropy_20' in df.columns: is_toxic |= (df['Entropy_20'] > 3.2)
+            if 'VolVol_Z' in df.columns: is_toxic |= (df['VolVol_Z'] > 3.0)
+            if 'Entropy_Z' in df.columns: is_toxic |= (df['Entropy_Z'] < 0.2) # Entropia muito baixa (Grinding)
 
-            # --- PROTEÇÃO INFERIOR (Contra Tendências Lisas - O NOVO FILTRO) ---
-            # Se a Entropia Z-Score for negativa, o mercado está "ordenado demais".
-            # Reversão à média falha aqui porque o preço não repica.
-            if 'Entropy_Z' in df.columns:
-                # Bloqueia se a entropia estiver abaixo da média histórica (Z < 0)
-                # Os seus dados mostram que Wins ocorrem em +0.67 e Losses em -0.16.
-                # Vamos ser conservadores e bloquear tudo abaixo de 0.2
-                is_toxic |= (df['Entropy_Z'] < 0.2) 
+            # Filtro de Half-Life
+            hl_col = next((c for c in ['half_life', 'half_life_60', 'HalfLife_60'] if c in df.columns), None)
+            if hl_col:
+                is_toxic |= (df[hl_col] > self.max_half_life)
 
-            # --- FILTRO DE ELASTICIDADE (Half-Life) ---
-            # Se o Half-Life for muito alto, o ativo perdeu a memória de preço.
-            if 'HalfLife_60' in df.columns:
-                is_toxic |= (df['HalfLife_60'] > self.max_half_life)
-
-            # Aplica a vacina
             buy_signal[is_toxic] = False
 
-        # --- 5. Aplicação dos Sinais e Stop Loss ---
+        # Aplicação Final
         df['SIGNAL'] = 'HOLD'
         df.loc[buy_signal, 'SIGNAL'] = 'BUY'
         df.loc[sell_signal, 'SIGNAL'] = 'SELL'
