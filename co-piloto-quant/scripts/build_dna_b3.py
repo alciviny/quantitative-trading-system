@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
 from src.co_piloto_quant.data.data_fetching import fetch_data
-from src.co_piloto_quant.utils import get_b3_tickers
+from src.co_piloto_quant.universe import get_b3_tickers
 # SUBSTITUIÇÃO: Sai analysis.py, entra IndicatorEngine e Math Tools
 from src.co_piloto_quant.data.indicator_engine import IndicatorEngine
 from src.co_piloto_quant.utils.math_tools import calculate_z_score
@@ -22,7 +22,7 @@ MIN_HISTORY = 300
 def analyze_asset_dna(ticker):
     try:
         # 1. Baixa dados
-        df = fetch_data(ticker, period="2y", interval="1d")
+        df = fetch_data(ticker, period="5y", interval="1d")
         if df.empty or len(df) < MIN_HISTORY: return None
 
         # Limpeza básica
