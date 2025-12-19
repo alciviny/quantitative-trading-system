@@ -1,4 +1,3 @@
-
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -9,9 +8,9 @@ import argparse
 # ==========================================================
 # Regras:
 # - Risco fixo por trade (risk_pct)
-# - Exposição máxima por trade (max_position_pct)
+# - Exposição máxima realista (cap institucional)
 # - Sem alavancagem implícita
-# - Perdas e ganhos proporcionais à exposição real
+# - Payoff proporcional à exposição
 # - Block bootstrap para dependência temporal
 # ==========================================================
 
@@ -23,14 +22,14 @@ def simulate_with_position_sizing(
     num_simulations=5000,
     block_size=5,
     atr_multiple=3.0,
-    max_position_pct=0.20,
     min_position_pct=0.01,
+    max_position_pct=0.08,  # CAP REALISTA (8%)
 ):
     final_returns = []
     max_drawdowns = []
     ruin_count = 0
 
-    # DEBUG: armazenar posições médias da 1ª simulação
+    # DEBUG: posições da 1ª simulação
     avg_positions = []
 
     returns = df["return"].dropna().values
@@ -38,7 +37,9 @@ def simulate_with_position_sizing(
     if len(returns) < block_size:
         block_size = max(1, len(returns) // 2)
 
-    # Block bootstrap
+    # -------------------------------
+    # Block Bootstrap
+    # -------------------------------
     blocks = [
         list(range(i, min(i + block_size, len(returns))))
         for i in range(len(returns) - block_size + 1)
@@ -48,9 +49,11 @@ def simulate_with_position_sizing(
         sampled_indices = np.random.randint(
             0, len(blocks), size=len(returns) // block_size + 1
         )
+
         sampled_trade_indices = []
         for idx in sampled_indices:
             sampled_trade_indices.extend(blocks[idx])
+
         sampled_trade_indices = sampled_trade_indices[: len(returns)]
 
         equity = np.array([initial_capital])
@@ -63,33 +66,29 @@ def simulate_with_position_sizing(
             atr = float(df.iloc[trade_idx].get("atr", price * 0.02))
 
             # ===============================
-            # ===============================
-            # POSITION SIZING PROFISSIONAL (REALISTA)
+            # POSITION SIZING BASEADO EM RISCO
             # ===============================
             risk_amount = current_capital * risk_pct
             stop_distance = atr * atr_multiple
 
             if stop_distance > 0 and price > 0:
-                # tamanho baseado apenas no risco
                 position_value = (risk_amount / stop_distance) * price
                 position_size_pct = position_value / current_capital
 
-                # LIMITES OPERACIONAIS REALISTAS
+                # CAP OPERACIONAL REALISTA
                 position_size_pct = np.clip(
                     position_size_pct,
                     min_position_pct,
-                    0.08,  # cap realista institucional (8%)
+                    max_position_pct,
                 )
             else:
                 position_size_pct = min_position_pct
 
-            # DEBUG: coleta apenas na primeira simulação
             if sim == 0:
                 avg_positions.append(position_size_pct)
 
             # ===============================
             # PAYOFF REALISTA (SEM ALAVANCAGEM)
-            # ===============================
             # ===============================
             adjusted_return = ret * position_size_pct
             new_capital = current_capital * (1 + adjusted_return)
@@ -112,12 +111,12 @@ def simulate_with_position_sizing(
     final_returns = np.array(final_returns)
     max_drawdowns = np.array(max_drawdowns)
 
-    # ===============================
-    # DEBUG FINAL DE POSITION SIZE
-    # ===============================
+    # -------------------------------
+    # DEBUG POSITION SIZE
+    # -------------------------------
     if len(avg_positions) > 0:
         avg_positions = np.array(avg_positions)
-        print(f"\n🔍 DEBUG Position Size (1ª simulação):")
+        print("\n🔍 DEBUG Position Size (1ª simulação):")
         print(f"  Média:    {avg_positions.mean():.2%}")
         print(f"  Mediana:  {np.median(avg_positions):.2%}")
         print(f"  Máx:      {avg_positions.max():.2%}")
@@ -158,6 +157,7 @@ def main():
     parser.add_argument("--simulations", type=int, default=5000)
     parser.add_argument("--initial-capital", type=float, default=10000.0)
     parser.add_argument("--atr-multiple", type=float, default=3.0)
+
     args = parser.parse_args()
 
     if not args.input_file.exists():
@@ -170,6 +170,7 @@ def main():
         print("❌ Coluna 'return' não encontrada")
         return
 
+    # Filtra regime se existir
     for col in df.columns:
         if col.lower() in ["regime", "regime_name", "market_regime", "estrategia"]:
             df = df[df[col].str.upper().str.contains(args.regime.upper(), na=False)]
@@ -213,4 +214,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
