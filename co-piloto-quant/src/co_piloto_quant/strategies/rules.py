@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-from co_piloto_quant.risk_regime import validate_market_regime
+from co_piloto_quant.risk_regime import RiskRegimeManager
 from co_piloto_quant.indicators.names import IndicatorNames
 from co_piloto_quant.config import (
     BB_PERIOD,
@@ -25,7 +25,8 @@ def check_rules_live(df: pd.DataFrame) -> dict:
             'Motivo_Bloqueio': "Dados insuficientes para análise."
         }
 
-    risk_check = validate_market_regime(df)
+    risk_manager = RiskRegimeManager()
+    risk_check = risk_manager.validate_market_regime(df)
     if not risk_check['approved']:
         return {
             'Sinal_Compra': False, 'Sinal_Venda': False,

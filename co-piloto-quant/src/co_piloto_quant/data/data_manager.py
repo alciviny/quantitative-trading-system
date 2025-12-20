@@ -8,7 +8,7 @@ from multiprocessing import cpu_count
 import hashlib
 
 from co_piloto_quant.data.database import load_price_data, save_price_data
-from co_piloto_quant.data.data_fetching import fetch_data_from_yahoo
+from co_piloto_quant.data.data_fetching import fetch_data
 
 logger = logging.getLogger(__name__)
 
@@ -155,13 +155,16 @@ class DataManager:
     def _fetch_external(
         self, ticker: str, df_local: pd.DataFrame
     ) -> pd.DataFrame:
-        start_date = None
-
         if df_local is not None and not df_local.empty:
             df_local = self._normalize_index(df_local)
-            start_date = df_local.index.max()
+            start_date = df_local.index.max().strftime('%Y-%m-%d')
+            end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+        else:
+            # Se não há dados locais, buscar um período padrão
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=365*2)).strftime('%Y-%m-%d')
 
-        return fetch_data_from_yahoo(ticker, start_date=start_date)
+        return fetch_data(ticker, start_date, end_date)
 
     # ===============================================================
     # UTILITÁRIOS
