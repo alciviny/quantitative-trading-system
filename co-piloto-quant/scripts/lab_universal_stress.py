@@ -484,6 +484,9 @@ def main():
     # Novo parâmetro Half-Life exposto
     adaptive_group.add_argument('--max-half-life', type=int, default=25, help='Filtro de elasticidade (Half-Life máximo)')
 
+    vm_group = parser.add_argument_group('Volatile Momentum')
+    vm_group.add_argument('--atr-stop', type=float, default=2.5, help='ATR multiplier for stop loss')
+    
     exec_group = parser.add_argument_group('Execution')
     exec_group.add_argument('--out', type=str, default=None)
     exec_group.add_argument('--workers', type=int, default=DEFAULT_WORKERS)
@@ -506,7 +509,7 @@ def main():
         strategy = VolatileMomentumProfessional(
             ema_fast=12,
             ema_slow=26,
-            atr_stop_multiplier=2.5,
+            atr_stop_multiplier=args.atr_stop,
             atr_profit_multiplier=3.0,
             target_regimes=['BULL_VOLATILE', 'BEAR_VOLATILE'] if args.regime == 'ALL' else [args.regime]
         )
