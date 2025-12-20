@@ -8,8 +8,7 @@ import os
 
 # --- NOVAS IMPORTAÇÕES DO PROJETO ---
 from co_piloto_quant.data.recorder import init_recorder_db, record_signal
-from co_piloto_quant.data.data_fetching import fetch_batch_data
-from co_piloto_quant.data.database import load_price_data
+from co_piloto_quant.data.data_manager import data_manager
 from co_piloto_quant.universe import get_expanded_universe
 
 from co_piloto_quant.data.indicator_engine import IndicatorEngine
@@ -22,16 +21,16 @@ from co_piloto_quant.indicators.names import IndicatorNames
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def process_single_ticker(ticker):
+def process_single_ticker(ticker, raw_df):
     """
-    Processa um único ativo: carrega dados, calcula indicadores e aplica a estratégia.
+    Processa um único ativo: calcula indicadores e aplica a estratégia.
+    O DataFrame agora é passado como argumento.
     """
     try:
-        # 1. Carregamento e Processamento Básico
-        raw_df = load_price_data(ticker)
+        # 1. Validação dos Dados Recebidos
         if raw_df is None or raw_df.empty or len(raw_df) < config.HURST_WINDOW:
             return None
-        # 1.5. Utiliza o DataFrame bruto diretamente para o IndicatorEngine
+        # Utiliza o DataFrame bruto diretamente para o IndicatorEngine
         df_for_indicators = raw_df
 
         # 2. Cálculo de Indicadores com IndicatorEngine
@@ -94,21 +93,26 @@ def run_scanner():
     tickers = get_expanded_universe()
     logger.info(f"Scanner iniciado para {len(tickers)} tickers com a estratégia '{config.ACTIVE_STRATEGY}'.")
 
-    # 1. Atualização da Base de Dados
-    logger.info("Verificando atualizações de dados...")
-    try:
-        fetch_batch_data(tickers, period="1y", interval="1d") # Busca um período menor para agilizar
-    except Exception as e:
-        logger.error(f"Erro no download em lote: {e}")
+    # 1. Atualização e Carregamento de Dados com DataManager
+    logger.info("Buscando e atualizando dados com o DataManager...")
+    # force_update=True garante que os dados mais recentes sejam buscados.
+    all_data = data_manager.get_data_batch(tickers, force_update=True)
+    
+    # Filtra tickers que não retornaram dados
+    valid_data = {ticker: df for ticker, df in all_data.items() if df is not None and not df.empty}
+    if len(valid_data) < len(tickers):
+        failed_tickers = set(tickers) - set(valid_data.keys())
+        logger.warning(f"Não foi possível obter dados para {len(failed_tickers)} tickers: {', '.join(failed_tickers)}")
 
     all_results = []
-    logger.info("Iniciando análise paralela...")
+    logger.info(f"Iniciando análise paralela para {len(valid_data)} tickers...")
 
     # 2. Análise em Paralelo
     with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
-        future_to_ticker = {executor.submit(process_single_ticker, t): t for t in tickers}
+        # Submete jobs com o ticker e o dataframe correspondente
+        future_to_ticker = {executor.submit(process_single_ticker, ticker, df): ticker for ticker, df in valid_data.items()}
         
-        for future in tqdm(concurrent.futures.as_completed(future_to_ticker), total=len(tickers), desc="Analisando Ativos"):
+        for future in tqdm(concurrent.futures.as_completed(future_to_ticker), total=len(valid_data), desc="Analisando Ativos"):
             result = future.result()
             if result:
                 all_results.append(result)
