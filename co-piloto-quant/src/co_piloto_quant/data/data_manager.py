@@ -124,7 +124,7 @@ class DataManager:
             logger.info(f"🟡 Dataset inalterado ({ticker})")
             return
 
-        save_price_data(ticker, df)
+        save_price_data(df, ticker)
 
         self._dataset_hash[ticker] = dataset_hash
 
@@ -164,7 +164,7 @@ class DataManager:
             end_date = datetime.now().strftime('%Y-%m-%d')
             start_date = (datetime.now() - timedelta(days=365*2)).strftime('%Y-%m-%d')
 
-        return fetch_data(ticker, start_date, end_date)
+        return fetch_data(ticker, start=start_date, end=end_date)
 
     # ===============================================================
     # UTILITÁRIOS

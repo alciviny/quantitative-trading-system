@@ -6,40 +6,7 @@ from typing import Dict, Optional
 # Importamos a conexão do seu módulo de banco existente
 from co_piloto_quant.data.database import DB_PATH
 
-def init_recorder_db():
-    """
-    Cria a tabela de histórico de sinais se ela não existir.
-    Essa tabela será o 'Dataset' para o futuro Machine Learning.
-    """
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS signals_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            signal_type TEXT NOT NULL,       -- Ex: 'COMPRA_TENDENCIA', 'VENDA_SNIPER'
-            price_at_signal REAL,            -- Preço na hora do sinal
-            
-            -- Features (Os dados que a IA vai aprender a ler)
-            hurst_val REAL,
-            entropy_val REAL,
-            hilbert_cycle TEXT,
-            hilbert_period REAL,
-            half_life REAL,
-            ou_r2 REAL,
-            
-            -- Targets (O resultado futuro - preenchido depois)
-            price_5d_later REAL,
-            price_10d_later REAL,
-            result_5d_pct REAL,
-            success_5d BOOLEAN
-        )
-        ''')
-        
-        conn.commit()
-    print("Tabela 'signals_history' inicializada/verificada com sucesso.")
+
 
 def record_signal(ticker: str, 
                   signal_type: str, 
@@ -130,8 +97,3 @@ def update_outcomes():
                 
         conn.commit()
     print("Atualização de resultados concluída.")
-
-if __name__ == "__main__":
-    # Teste rápido
-    init_recorder_db()
-    print("Módulo Recorder pronto.")
