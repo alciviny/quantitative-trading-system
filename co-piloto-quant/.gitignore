@@ -23,3 +23,7 @@ src/co_piloto_quant/data/processed/
 
 # Banco de dados
 *.db
+
+# Pastas de Backup e Logs
+../_LEGACY_BACKUP/
+data/strategy_logs/

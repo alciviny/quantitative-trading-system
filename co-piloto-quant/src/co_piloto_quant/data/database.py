@@ -12,8 +12,12 @@ DATA_PATH.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_PATH / "market_data.db"
 
 def init_db():
-    """Inicializa as tabelas do banco de dados."""
+    """Inicializa as tabelas e configura o modo WAL para concorrência."""
     with sqlite3.connect(DB_PATH) as conn:
+        # ATIVA O WAL: Permite leitura e escrita simultâneas sem travar
+        conn.execute("PRAGMA journal_mode=WAL;") 
+        conn.execute("PRAGMA synchronous=NORMAL;") # Mais performance, seguro o suficiente
+        
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS assets (
@@ -33,6 +37,43 @@ def init_db():
                 volume REAL,
                 PRIMARY KEY (ticker, date),
                 FOREIGN KEY (ticker) REFERENCES assets(ticker)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS trades_execution (
+                ticket_id INTEGER PRIMARY KEY, -- Ticket do MT5
+                ticker TEXT,
+                entry_time TIMESTAMP,
+                exit_time TIMESTAMP,
+                entry_price REAL,
+                exit_price REAL,
+                size REAL,
+                profit REAL,
+                strategy_name TEXT,
+                magic_number INTEGER
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS signals_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                signal_type TEXT NOT NULL,       -- Ex: 'COMPRA_TENDENCIA', 'VENDA_SNIPER'
+                price_at_signal REAL,            -- Preço na hora do sinal
+                
+                -- Features (Os dados que a IA vai aprender a ler)
+                hurst_val REAL,
+                entropy_val REAL,
+                hilbert_cycle TEXT,
+                hilbert_period REAL,
+                half_life REAL,
+                ou_r2 REAL,
+                
+                -- Targets (O resultado futuro - preenchido depois)
+                price_5d_later REAL,
+                price_10d_later REAL,
+                result_5d_pct REAL,
+                success_5d BOOLEAN
             )
         """)
         conn.commit()
@@ -117,4 +158,13 @@ def load_price_data(ticker: str) -> pd.DataFrame:
         query = "SELECT date, open, high, low, close, volume FROM ohlcv WHERE ticker = ? ORDER BY date ASC"
         df = pd.read_sql_query(query, conn, params=(ticker,), index_col='date', parse_dates=['date'])
     
+    return df
+
+def load_ml_dataset() -> pd.DataFrame:
+    """Carrega todo o dataset de ML (features e targets) da tabela signals_history."""
+    with sqlite3.connect(DB_PATH) as conn:
+        # O PRAGMA WAL ainda é uma boa ideia para leituras concorrentes
+        conn.execute("PRAGMA journal_mode=WAL;")
+        query = "SELECT * FROM signals_history"
+        df = pd.read_sql_query(query, conn, parse_dates=['date'])
     return df

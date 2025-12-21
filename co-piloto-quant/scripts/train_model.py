@@ -6,6 +6,7 @@ import joblib
 import logging
 import matplotlib.pyplot as plt
 
+from co_piloto_quant.data.database import load_ml_dataset
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     classification_report,
@@ -20,7 +21,6 @@ from sklearn.inspection import permutation_importance
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger("Trainer")
 
-DATA_DIR = 'data/ml_ready'
 MODEL_DIR = 'models'
 os.makedirs(MODEL_DIR, exist_ok=True)
 
@@ -29,56 +29,69 @@ PROB_THRESHOLD = 0.60
 
 
 # =========================
-# Load Dataset
-# =========================
-def load_dataset():
-    logger.info("Carregando dataset...")
-    try:
-        df = pd.read_parquet(DATA_DIR)
-        df = df.dropna()
-        logger.info(f"Dataset: {df.shape[0]} linhas | {df.shape[1]} colunas")
-        return df
-    except Exception as e:
-        logger.error(f"Erro ao carregar dados: {e}")
-        return None
-
-
-# =========================
-# Walk-forward split
-# =========================
-def temporal_split(df, split_ratio=0.8):
-    split_point = int(len(df) * split_ratio)
-    train = df.iloc[:split_point]
-    test = df.iloc[split_point:]
-    return train, test
-
-
-# =========================
 # Training Pipeline
 # =========================
 def train_oracle():
-    df = load_dataset()
-    if df is None:
+    # 1. Carregamento de dados via Database (Fonte Única da Verdade)
+    logger.info("Carregando dataset do banco de dados...")
+    try:
+        df = load_ml_dataset()
+        if df.empty:
+            logger.error("Dataset do banco de dados está vazio. Abortando.")
+            return
+        logger.info(f"Dataset: {df.shape[0]} linhas | {df.shape[1]} colunas")
+    except Exception as e:
+        logger.error(f"Erro ao carregar dados do banco de dados: {e}")
         return
+
+    # 2. Preparação e Limpeza
+    # Renomeia colunas para manter compatibilidade com o código legado
+    df = df.rename(columns={'date': 'data_pregao', 'success_5d': 'target_class_5d'})
+    
+    # Converte booleano para inteiro (0/1) que é o formato padrão para targets
+    if 'target_class_5d' in df.columns:
+        df['target_class_5d'] = df['target_class_5d'].astype(int)
+
+    # Garante que a coluna de data é datetime
+    df['data_pregao'] = pd.to_datetime(df['data_pregao'])
+    
+    # Remove valores nulos
+    df = df.dropna()
 
     # Ordenação temporal (CRÍTICO)
     df = df.sort_values(by='data_pregao')
 
     target = 'target_class_5d'
 
+    # Remove colunas que não são features
     features = [
         c for c in df.columns
         if c not in [
+            'id',  # ID do banco de dados
             'ticker',
             'data_pregao',
-            'target_ret_5d',
-            'target_logret_5d',
+            'signal_type',
+            'price_at_signal',
+            'price_5d_later',
+            'price_10d_later',
+            'result_5d_pct',
             'target_class_5d'
         ]
     ]
-
+    
+    logger.info(f"Features utilizadas no treino: {features}")
+    
+    # Garante que temos features para treinar
+    if not features:
+        logger.error("Nenhuma coluna de feature identificada. Verifique o dataset. Abortando.")
+        return
+    
     # Split temporal
     df_train, df_test = temporal_split(df)
+
+    if df_train.empty or df_test.empty:
+        logger.error("Não há dados suficientes para o split de treino/teste. Abortando.")
+        return
 
     X_train, y_train = df_train[features], df_train[target]
     X_test, y_test = df_test[features], df_test[target]
