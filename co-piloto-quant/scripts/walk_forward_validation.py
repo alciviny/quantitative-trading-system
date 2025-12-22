@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
@@ -137,14 +137,16 @@ def calculate_missing_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df[IndicatorNames.entropy_z(20)] = 0.5
         
     # --- Volatility of Volatility ---
-    try:
-        vol_vol_series = _calculate_rolling_vol_of_vol(close_s, window=20)
-        vol_vol_series = vol_vol_series.replace([np.inf, -np.inf], np.nan)
-        rolling_mean_v = vol_vol_series.rolling(252, min_periods=1).mean()
-        rolling_std_v = vol_vol_series.rolling(252, min_periods=1).std().replace(0, np.nan)
-        df['VolVol_Z'] = ((vol_vol_series - rolling_mean_v) / rolling_std_v).fillna(0.0)
-    except Exception:
-        df['VolVol_Z'] = 0.0
+    # COMENTADO PARA ACELERAR: Cálculo lento e não usado pela estratégia DynamicMR.
+    # try:
+    #     vol_vol_series = _calculate_rolling_vol_of_vol(close_s, window=20)
+    #     vol_vol_series = vol_vol_series.replace([np.inf, -np.inf], np.nan)
+    #     rolling_mean_v = vol_vol_series.rolling(252, min_periods=1).mean()
+    #     rolling_std_v = vol_vol_series.rolling(252, min_periods=1).std().replace(0, np.nan)
+    #     df['VolVol_Z'] = ((vol_vol_series - rolling_mean_v) / rolling_std_v).fillna(0.0)
+    # except Exception:
+    df['VolVol_Z'] = 0.0  # Deixado para não quebrar dependências futuras
+
 
     return df
 
@@ -374,6 +376,9 @@ def process_file_window(file_path: Path, strategy, df_train: pd.DataFrame, df_te
         if rename_map:
             full_df.rename(columns=rename_map, inplace=True)
 
+        # Remove colunas duplicadas geradas pela renomeação imprecisa
+        full_df = full_df.loc[:, ~full_df.columns.duplicated()]
+
         full_df = calculate_missing_indicators(full_df)
         full_df = classify_regimes(full_df)
         full_df['REGIME'] = full_df['REGIME'].astype(str)
@@ -477,22 +482,22 @@ def main():
     parser.add_argument('--disable-regime-filter', action='store_true')
     parser.add_argument('--max-half-life', type=int, default=25)
     parser.add_argument('--out', type=str, default=None)
-    parser.add_argument('--workers', type=int, default=DEFAULT_WORKERS)
+    parser.add_argument('--workers', type=int, default=8)
 
     args = parser.parse_args()
     files = get_parquet_files()
 
     if args.strategy == 'dynamic-mr':
-        # PARÂMETROS INSTITUCIONAIS PARA O LAB
+        # PARÂMETROS OTIMIZADOS PARA VELOCIDADE E GERAÇÃO DE TRADES
         strategy = DynamicRegimeMeanReversion(
-            lookback_regime=252,          # 1 ano de histórico para ranking relativo
-            hurst_window=72,              # Janela padrão de Hurst
-            entropy_window=20,            # Janela padrão de Entropia
-            regime_score_threshold=0.65,  # Começando exigente, mas realista
-            regime_persistence_window=5,  # Exige 1 semana de estabilidade
+            lookback_regime=80,           # Ajustado para caber na janela de treino de 6 meses
+            hurst_window=72,              
+            entropy_window=20,            
+            regime_score_threshold=0.60,  # Reduzido para facilitar mais sinais
+            regime_persistence_window=3,  # Reduzido para ser mais reativo
             bb_period=20,
             bb_dev=2.0,
-            save_logs=True                # CRÍTICO: Precisamos ver o 'debug_regime_ok'
+            save_logs=False               # Desligado para acelerar a execução
         )
         # Ajuste de custos para "Realidade Institucional"
         global CUSTO_TOTAL_TRADE
@@ -547,7 +552,7 @@ def main():
         window_train_trades = []
         window_test_trades = []
         
-        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+        with ProcessPoolExecutor(max_workers=args.workers) as ex:
             futures = {}
             for fp in files:
                 future = ex.submit(process_file_window, fp, strategy, train_dates, test_dates, window_name)
