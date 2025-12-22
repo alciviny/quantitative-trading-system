@@ -30,8 +30,10 @@ except ImportError:
         median_abs_deviation = None
 
 from co_piloto_quant.strategies.mean_reversion import MeanReversionStrategy
+from co_piloto_quant.strategies.dynamic_mr import DynamicRegimeMeanReversion
 from co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
 from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
+from co_piloto_quant.indicators.names import IndicatorNames
 
 ML_READY_PATH = "src/co_piloto_quant/data/ml_ready"
 CUSTO_TOTAL_TRADE = 0.0006
@@ -109,27 +111,32 @@ def calculate_missing_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     close_s = df['close'].ffill().bfill()
 
+    # --- Hurst ---
     try:
-        hurst_series = calculate_rolling_hurst(close_s, window=72, kind='returns')
+        hurst_window = 72
+        hurst_col_name = IndicatorNames.hurst_z(hurst_window)
+        hurst_series = calculate_rolling_hurst(close_s, window=hurst_window, kind='returns')
         hurst_series = hurst_series.replace([np.inf, -np.inf], np.nan)
         rolling_mean_h = hurst_series.rolling(252, min_periods=1).mean()
         rolling_std_h = hurst_series.rolling(252, min_periods=1).std().replace(0, np.nan)
-        df['hurst_z_72_c'] = ((hurst_series - rolling_mean_h) / rolling_std_h).fillna(0.5)
+        df[hurst_col_name] = ((hurst_series - rolling_mean_h) / rolling_std_h).fillna(0.5)
     except Exception:
-        df['hurst_z_72_c'] = 0.5
+        df[IndicatorNames.hurst_z(72)] = 0.5
 
+    # --- Entropy ---
     try:
-        entropy_series = calculate_rolling_entropy(close_s, window=20)
+        entropy_window = 20
+        entropy_col_name = IndicatorNames.entropy_z(entropy_window)
+        entropy_series = calculate_rolling_entropy(close_s, window=entropy_window)
         entropy_series = entropy_series.replace([np.inf, -np.inf], np.nan)
-        df['Entropy_20'] = entropy_series 
         
         rolling_mean_e = entropy_series.rolling(252, min_periods=1).mean()
         rolling_std_e = entropy_series.rolling(252, min_periods=1).std().replace(0, np.nan)
-        df['Entropy_Z'] = ((entropy_series - rolling_mean_e) / rolling_std_e).fillna(0.5)
+        df[entropy_col_name] = ((entropy_series - rolling_mean_e) / rolling_std_e).fillna(0.5)
     except Exception:
-        df['Entropy_20'] = 0.0
-        df['Entropy_Z'] = 0.5
+        df[IndicatorNames.entropy_z(20)] = 0.5
         
+    # --- Volatility of Volatility ---
     try:
         vol_vol_series = _calculate_rolling_vol_of_vol(close_s, window=20)
         vol_vol_series = vol_vol_series.replace([np.inf, -np.inf], np.nan)
@@ -138,9 +145,6 @@ def calculate_missing_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df['VolVol_Z'] = ((vol_vol_series - rolling_mean_v) / rolling_std_v).fillna(0.0)
     except Exception:
         df['VolVol_Z'] = 0.0
-
-    if 'entropy_z_20' in df.columns:
-        df.rename(columns={'entropy_z_20': 'Entropy_Z'}, inplace=True)
 
     return df
 
@@ -166,10 +170,15 @@ def _build_rename_map(columns: List[str]) -> Dict[str, str]:
     rename_map: Dict[str, str] = {}
     upper_cols = {c.upper(): c for c in columns}
 
+    # Explicitly find and rename Bollinger Bands to match IndicatorNames convention
     for upper, orig in upper_cols.items():
-        if 'BB_' in upper:
-            rename_map[orig] = orig.lower()
+        if 'BB_LOWER' in upper:
+            # This assumes the strategy is using the default parameters (20, 2.0)
+            rename_map[orig] = IndicatorNames.bollinger_lower(20, 2.0)
+        elif 'BB_MID' in upper:  # Catches BB_MID and BB_MIDDLE
+            rename_map[orig] = IndicatorNames.bollinger_middle(20)
 
+    # Handle other known indicators
     known = {'IFR_120': 'rsi_120', 'WWMA_200': 'wwma_200', 'STOCH_K_20_3': 'stoch_k_20_3'}
     for k, v in known.items():
         if k in upper_cols:
@@ -179,6 +188,8 @@ def _build_rename_map(columns: List[str]) -> Dict[str, str]:
 
 
 def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, close_open_trades: bool = True) -> pd.DataFrame:
+    df = df.copy().sort_index()
+    df = df.loc[~df.index.duplicated(keep='last')]
     try:
         df_eval = strategy.evaluate(df.copy(), ticker)
     except Exception as e:
@@ -367,13 +378,36 @@ def process_file_window(file_path: Path, strategy, df_train: pd.DataFrame, df_te
         full_df = classify_regimes(full_df)
         full_df['REGIME'] = full_df['REGIME'].astype(str)
 
+        # Explicitly align all columns to the main index to prevent alignment errors.
+        # This can happen if indicators loaded from files have slightly different date ranges.
+        main_index = full_df.index
+        for col in full_df.columns:
+            if not full_df[col].index.equals(main_index):
+                full_df[col] = full_df[col].reindex(main_index)
+
+        # ===============================
+        # FINAL ALIGNMENT + SANITIZATION
+        # ===============================
+        full_df = full_df.sort_index()
+
+        # Mantém apenas linhas completas para colunas críticas
+        critical_cols = ['close']
+        critical_cols += [c for c in full_df.columns if 'bb_' in c.lower()]
+        critical_cols += [c for c in full_df.columns if 'hurst' in c.lower()]
+        critical_cols += [c for c in full_df.columns if 'entropy' in c.lower()]
+
+        critical_cols = list(set(critical_cols))
+
+        full_df = full_df.dropna(subset=critical_cols)
+
+
         # Filtra apenas os dados da janela de treino
-        df_train_ticker = full_df[full_df.index >= df_train.index[0]]
-        df_train_ticker = df_train_ticker[df_train_ticker.index <= df_train.index[-1]].copy()
+        df_train_ticker = full_df[full_df.index >= df_train[0]]
+        df_train_ticker = df_train_ticker[df_train_ticker.index <= df_train[-1]].copy()
 
         # Filtra apenas os dados da janela de teste
-        df_test_ticker = full_df[full_df.index >= df_test.index[0]]
-        df_test_ticker = df_test_ticker[df_test_ticker.index <= df_test.index[-1]].copy()
+        df_test_ticker = full_df[full_df.index >= df_test[0]]
+        df_test_ticker = df_test_ticker[df_test_ticker.index <= df_test[-1]].copy()
 
         trades_train = pd.DataFrame()
         trades_test = pd.DataFrame()
@@ -434,7 +468,7 @@ def main():
     setup_logging()
     parser = argparse.ArgumentParser(description='Walk-Forward Validation')
     
-    parser.add_argument('--strategy', choices=['mean-reversion', 'adaptive-sniper'], default='mean-reversion')
+    parser.add_argument('--strategy', choices=['mean-reversion', 'adaptive-sniper', 'dynamic-mr'], default='dynamic-mr')
     parser.add_argument('--bb-std', type=float, default=1.5)
     parser.add_argument('--rsi-period', type=int, default=120)
     parser.add_argument('--bb-std-volatile', type=float, default=2.5)
@@ -448,7 +482,23 @@ def main():
     args = parser.parse_args()
     files = get_parquet_files()
 
-    if args.strategy == 'mean-reversion':
+    if args.strategy == 'dynamic-mr':
+        # PARÂMETROS INSTITUCIONAIS PARA O LAB
+        strategy = DynamicRegimeMeanReversion(
+            lookback_regime=252,          # 1 ano de histórico para ranking relativo
+            hurst_window=72,              # Janela padrão de Hurst
+            entropy_window=20,            # Janela padrão de Entropia
+            regime_score_threshold=0.65,  # Começando exigente, mas realista
+            regime_persistence_window=5,  # Exige 1 semana de estabilidade
+            bb_period=20,
+            bb_dev=2.0,
+            save_logs=True                # CRÍTICO: Precisamos ver o 'debug_regime_ok'
+        )
+        # Ajuste de custos para "Realidade Institucional"
+        global CUSTO_TOTAL_TRADE
+        CUSTO_TOTAL_TRADE = 0.0012  # 0.12% total (Slippage + Taxas)
+        
+    elif args.strategy == 'mean-reversion':
         strategy = MeanReversionStrategy(
             bb_std_dev=args.bb_std, 
             rsi_period=args.rsi_period,

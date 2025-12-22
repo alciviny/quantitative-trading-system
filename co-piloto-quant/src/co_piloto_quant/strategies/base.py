@@ -98,80 +98,89 @@ class AdaptiveSniperStrategy(Strategy):
         return "AdaptiveSniperStrategy"
 
     def _calculate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
-        """ Lógica de cálculo de sinais, antes contida em 'evaluate'. """
-        
-        # Converte todas as colunas numéricas para float para evitar erros de tipo
-        numeric_cols = df.select_dtypes(include=[np.integer]).columns
-        for col in numeric_cols:
-            df[col] = df[col].astype(float)
-        
-        # 1. Definição centralizada dos nomes das colunas via IndicatorNames
+
+        # --- SANITIZAÇÃO GLOBAL ---
+        df = df.copy()
+        df = df.sort_index()
+        df = df.loc[~df.index.duplicated()]
+
+        # Garante que tudo seja float quando possível
+        for col in df.columns:
+            if pd.api.types.is_integer_dtype(df[col]):
+                df[col] = df[col].astype(float)
+
+        def safe_series(col, default):
+            if col in df.columns:
+                return df[col]
+            return pd.Series(default, index=df.index)
+
+        # --- NOMES DAS COLUNAS ---
         col_bb_upper = IndicatorNames.bollinger_upper(BB_PERIOD, self.bb_entry_std_dev)
         col_bb_lower = IndicatorNames.bollinger_lower(BB_PERIOD, self.bb_entry_std_dev)
-        
-        # A banda de saída agora é configurável
         col_bb_upper_exit = IndicatorNames.bollinger_upper(BB_PERIOD, self.bb_exit_std_dev)
-        
-        col_stoch_k  = IndicatorNames.stochastic_k(STOCH_K_PERIOD, STOCH_K_SMOOTH)
-        col_wwma     = IndicatorNames.wwma(200)
-        col_hurst_z  = IndicatorNames.hurst_z(HURST_WINDOW)
-        # A janela de entropia é 20 em analysis.py
-        col_entropy_z = IndicatorNames.entropy_z(20) 
+
+        col_stoch_k = IndicatorNames.stochastic_k(STOCH_K_PERIOD, STOCH_K_SMOOTH)
+        col_wwma = IndicatorNames.wwma(200)
+        col_hurst_z = IndicatorNames.hurst_z(HURST_WINDOW)
+        col_entropy_z = IndicatorNames.entropy_z(20)
 
         df['SIGNAL'] = 'HOLD'
-        
-        required_cols = [col_bb_upper, col_stoch_k, col_hurst_z, col_entropy_z, col_bb_upper_exit]
-        missing_cols = [c for c in required_cols if c not in df.columns]
-        if missing_cols:
+
+        required_cols = [col_bb_upper, col_bb_lower, col_stoch_k, col_hurst_z, col_entropy_z, col_bb_upper_exit]
+        if any(c not in df.columns for c in required_cols):
             return df
 
-        # 3. Filtros de Regime, agora usando o threshold de entropia configurável
-        mask_regime_ok = (df.get(col_hurst_z, pd.Series(0, index=df.index)).fillna(0) >= -0.5) & \
-                         (df.get(col_entropy_z, pd.Series(10, index=df.index)).fillna(10) <= self.entropy_chaos_threshold)
-        
-        # 4. Lógica de COMPRA
-        mask_buy_zone = (df['close'] >= df[col_bb_lower]) & (df['close'] <= df[col_bb_upper])
-        mask_stoch_buy = df[col_stoch_k] < 30
-        
-        # As colunas TPM podem não estar presentes
-        mask_flow_buy = pd.Series(True, index=df.index)  # Default: permite compra
+        # --- REGIME ---
+        hurst = safe_series(col_hurst_z, 0.0)
+        entropy = safe_series(col_entropy_z, 10.0)
+
+        mask_regime_ok = (hurst >= -0.5) & (entropy <= self.entropy_chaos_threshold)
+
+        # --- BUY ---
+        close = df['close']
+        bb_lower = df[col_bb_lower]
+        bb_upper = df[col_bb_upper]
+        stoch = df[col_stoch_k]
+
+        mask_buy_zone = (close >= bb_lower) & (close <= bb_upper)
+        mask_stoch_buy = stoch < 30
+
+        mask_flow_buy = pd.Series(True, index=df.index)
+
         if 'obtr' in df.columns:
-            # Procura pela banda média de OBTR (qualquer período)
-            obtr_cols = [c for c in df.columns if c.startswith('obtr_') and '_middle' in c]
-            if obtr_cols:
-                col_obtr_mid = obtr_cols[0]
-                mask_flow_buy = df['obtr'] > df[col_obtr_mid]
-        
+            obtr_mid = next((c for c in df.columns if c.startswith('obtr_') and '_middle' in c), None)
+            if obtr_mid:
+                mask_flow_buy &= df['obtr'] > df[obtr_mid]
+
         if 'wad' in df.columns:
-            # Procura pela banda média de WAD (qualquer período)
-            wad_cols = [c for c in df.columns if c.startswith('wad_') and '_middle' in c]
-            if wad_cols:
-                col_wad_mid = wad_cols[0]
-                mask_flow_buy = mask_flow_buy | (df['wad'] > df[col_wad_mid])
+            wad_mid = next((c for c in df.columns if c.startswith('wad_') and '_middle' in c), None)
+            if wad_mid:
+                mask_flow_buy |= df['wad'] > df[wad_mid]
 
         final_buy_signal = mask_regime_ok & mask_buy_zone & mask_stoch_buy & mask_flow_buy
-        
-        # 5. Lógica de VENDA, agora usando a banda de saída configurável
-        mask_trend_down = df['close'] < df.get(col_wwma, np.inf)
-        mask_sell_zone = df['close'] >= df[col_bb_upper_exit]
-        mask_stoch_sell = df[col_stoch_k] > 70
-        
-        # As colunas TPM podem não estar presentes
-        mask_flow_sell = pd.Series(True, index=df.index)  # Default: permite venda
+
+        # --- SELL ---
+        wwma = safe_series(col_wwma, np.inf)
+
+        mask_trend_down = close < wwma
+        mask_sell_zone = close >= df[col_bb_upper_exit]
+        mask_stoch_sell = stoch > 70
+
+        mask_flow_sell = pd.Series(True, index=df.index)
+
         if 'obtr' in df.columns:
-            obtr_cols = [c for c in df.columns if c.startswith('obtr_') and '_middle' in c]
-            if obtr_cols:
-                col_obtr_mid = obtr_cols[0]
-                mask_flow_sell = df['obtr'] < df[col_obtr_mid]
-             
+            obtr_mid = next((c for c in df.columns if c.startswith('obtr_') and '_middle' in c), None)
+            if obtr_mid:
+                mask_flow_sell &= df['obtr'] < df[obtr_mid]
+
         final_sell_signal = mask_regime_ok & mask_trend_down & mask_sell_zone & mask_stoch_sell & mask_flow_sell
-        
-        # 6. Aplicação dos Sinais
+
+        # --- APLICAÇÃO ---
         df.loc[final_buy_signal, 'SIGNAL'] = 'BUY'
         df.loc[final_sell_signal, 'SIGNAL'] = 'SELL'
-        
+
         df['STOP_LOSS'] = np.nan
-        df.loc[final_buy_signal, 'STOP_LOSS'] = df.loc[final_buy_signal, col_bb_lower]
-        df.loc[final_sell_signal, 'STOP_LOSS'] = df.loc[final_sell_signal, col_bb_upper_exit]
+        df.loc[final_buy_signal, 'STOP_LOSS'] = bb_lower
+        df.loc[final_sell_signal, 'STOP_LOSS'] = df[col_bb_upper_exit]
 
         return df
