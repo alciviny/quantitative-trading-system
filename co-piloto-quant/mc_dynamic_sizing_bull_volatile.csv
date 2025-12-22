@@ -1,2 +1,0 @@
-regime,risk_pct,atr_multiple,initial_capital,num_trades,p5_return,p10_return,median_return,p90_return,p95_return,max_dd_p90,max_dd_p95,prob_ruin,num_sims
-BULL_VOLATILE,0.5,2.0,10000.0,114,70.67766804120825,83.72133546099522,160.1596027789648,305.1478002049242,363.92591108703334,0.03447935319051557,0.034479353190516,0.0,5000
