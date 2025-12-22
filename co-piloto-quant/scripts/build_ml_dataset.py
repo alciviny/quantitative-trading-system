@@ -26,8 +26,18 @@ logger = logging.getLogger("ML_Builder")
 # Importações do Sistema
 # -------------------------------------------------------
 from src.co_piloto_quant.data.data_fetching import fetch_data
-from src.co_piloto_quant.analysis import calculate_indicators
 from src.co_piloto_quant.universe import get_b3_tickers
+
+# --- CORREÇÃO: Usar process_data em vez de calculate_indicators ---
+from src.co_piloto_quant.data.data_processing import process_data
+
+# --- NOVAS IMPORTAÇÕES (Cérebro Quantitativo) ---
+# Certifique-se de que os arquivos abaixo existem conforme o Passo 1
+from src.co_piloto_quant.indicators.special.frac_diff import fractional_diff_fixed_window
+from src.co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
+from src.co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
+# Se tiver half_life:
+# from src.co_piloto_quant.indicators.special.half_life import calculate_rolling_ou_params
 
 # -------------------------------------------------------
 # Configurações de ML
@@ -80,18 +90,51 @@ def process_asset_history(ticker: str) -> pd.DataFrame | None:
         if 'adj close' in df.columns:
             df.rename(columns={'adj close': 'close'}, inplace=True)
 
-        # Features quantitativas
-        df_feat = calculate_indicators(df)
+        # =========================================================
+        # ENGENHARIA DE FEATURES (O Cérebro da IA)
+        # =========================================================
+        
+        # 1. Preço Fracionado (A Verdade Estacionária)
+        # Importante para o modelo aprender padrões que duram anos
+        df['close_frac'] = fractional_diff_fixed_window(df['close'], d=0.4, window=50)
+        
+        # 2. Indicadores Especiais (Regime de Mercado)
+        # Hurst (Tendência vs Reversão)
+        hurst_series = calculate_rolling_hurst(df['close'], window=72)
+        if isinstance(hurst_series, pd.DataFrame):
+            df['hurst_val'] = hurst_series.iloc[:, 0] # Pega a primeira coluna se for DF
+        else:
+            df['hurst_val'] = hurst_series
+            
+        # Entropia (Caos vs Ordem)
+        entropy_series = calculate_rolling_entropy(df['close'], window=20)
+        if isinstance(entropy_series, pd.DataFrame):
+            df['entropy_val'] = entropy_series.iloc[:, 0]
+        else:
+            df['entropy_val'] = entropy_series
 
-        if df_feat is None or df_feat.empty:
+        # 3. Features Técnicas Clássicas (Bandas, RSI, etc.)
+        # Substituímos calculate_indicators por process_data
+        df_tech = process_data(df)
+        
+        # Junta tudo no DataFrame principal
+        # Apenas colunas novas para evitar duplicidade
+        cols_to_use = df_tech.columns.difference(df.columns)
+        df = df.join(df_tech[cols_to_use])
+
+        if df is None or df.empty:
             return None
 
-        # Targets
-        df_final = create_targets(df_feat, TARGET_HORIZON)
+        # =========================================================
+        # PREPARAÇÃO FINAL
+        # =========================================================
 
-        # Remove linhas sem futuro
+        # Targets
+        df_final = create_targets(df, TARGET_HORIZON)
+
+        # Remove linhas sem futuro (targets NaN) e sem passado (indicadores NaN)
         target_col = f'target_ret_{TARGET_HORIZON}d'
-        df_final = df_final.dropna(subset=[target_col])
+        df_final = df_final.dropna(subset=[target_col, 'close_frac', 'hurst_val'])
 
         # Metadados
         df_final['ticker'] = ticker

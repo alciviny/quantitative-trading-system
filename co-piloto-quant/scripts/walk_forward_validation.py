@@ -410,9 +410,9 @@ def process_file_window(file_path: Path, strategy, df_train: pd.DataFrame, df_te
         df_train_ticker = full_df[full_df.index >= df_train[0]]
         df_train_ticker = df_train_ticker[df_train_ticker.index <= df_train[-1]].copy()
 
-        # Filtra apenas os dados da janela de teste
-        df_test_ticker = full_df[full_df.index >= df_test[0]]
-        df_test_ticker = df_test_ticker[df_test_ticker.index <= df_test[-1]].copy()
+        # Filtra apenas os dados da janela de treino
+        df_train_ticker = full_df[full_df.index >= df_train[0]]
+        df_train_ticker = df_train_ticker[df_train_ticker.index <= df_train[-1]].copy()
 
         trades_train = pd.DataFrame()
         trades_test = pd.DataFrame()
@@ -423,11 +423,26 @@ def process_file_window(file_path: Path, strategy, df_train: pd.DataFrame, df_te
                 trades_train['phase'] = 'TRAIN'
                 trades_train['window'] = window_name
 
-        if not df_test_ticker.empty:
-            trades_test = run_strategy_simulation(df_test_ticker, strategy, ticker, close_open_trades=True)
-            if not trades_test.empty:
-                trades_test['phase'] = 'TEST'
-                trades_test['window'] = window_name
+        # --- Lógica de Teste com Período de Warm-up ---
+        # Garante que a estratégia tenha dados suficientes (ex: 252 dias de lookback)
+        # antes do início real do período de teste.
+        warmup_days = 300  # Buffer de segurança para lookbacks (ex: 252 dias)
+        start_date_with_warmup = df_test[0] - pd.Timedelta(days=warmup_days)
+
+        # Filtra o dataframe para incluir o período de warm-up + teste
+        df_test_ticker_raw = full_df[full_df.index >= start_date_with_warmup]
+        df_test_ticker_raw = df_test_ticker_raw[df_test_ticker_raw.index <= df_test[-1]].copy()
+
+        if not df_test_ticker_raw.empty:
+            # Roda a simulação no dataframe estendido (com warm-up)
+            trades_test_raw = run_strategy_simulation(df_test_ticker_raw, strategy, ticker, close_open_trades=True)
+            
+            # Filtra APENAS os trades que ocorreram dentro da janela de teste oficial
+            if not trades_test_raw.empty:
+                trades_test = trades_test_raw[trades_test_raw['date_entry'] >= df_test[0]].copy()
+                if not trades_test.empty:
+                    trades_test['phase'] = 'TEST'
+                    trades_test['window'] = window_name
 
         return trades_train, trades_test
 
@@ -490,7 +505,7 @@ def main():
     if args.strategy == 'dynamic-mr':
         # PARÂMETROS OTIMIZADOS PARA VELOCIDADE E GERAÇÃO DE TRADES
         strategy = DynamicRegimeMeanReversion(
-            lookback_regime=80,           # Ajustado para caber na janela de treino de 6 meses
+            lookback_regime=252,          # Lookback original que requer warm-up
             hurst_window=72,              
             entropy_window=20,            
             regime_score_threshold=0.60,  # Reduzido para facilitar mais sinais

@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from co_piloto_quant.strategies.base import Strategy
 from co_piloto_quant.indicators.names import IndicatorNames
+from src.co_piloto_quant.indicators.special.frac_diff import fractional_diff_fixed_window
 
 
 class DynamicRegimeMeanReversion(Strategy):
@@ -71,26 +72,44 @@ class DynamicRegimeMeanReversion(Strategy):
     # ======================================================
 
     def _calculate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = self._calculate_regime_features(df)
+        df = self._calculate_regime_features(df) # Mantém o cálculo de regime original
 
-        col_bb_lower = IndicatorNames.bollinger_lower(self.bb_period, self.bb_dev)
-        col_bb_mid = IndicatorNames.bollinger_middle(self.bb_period)
+        # --- A MÁGICA ACONTECE AQUI ---
+        # 1. Calcula o Preço Fracionado
+        df['close_frac'] = fractional_diff_fixed_window(df['close'], d=0.4, window=50)
 
-        # Alinhamento seguro criando um dataframe temporário
-        safe_df = df[["close", col_bb_lower, col_bb_mid, "regime_ok"]].copy()
-        safe_df["regime_ok"] = safe_df["regime_ok"].fillna(False)
-        safe_df.dropna(inplace=True)
+        # 2. Calcula Bandas de Bollinger sobre o PREÇO FRACIONADO (Estacionário)
+        # Como o close_frac oscila perto de zero, as bandas serão canais de volatilidade pura
+        rolling_mean = df['close_frac'].rolling(self.bb_period).mean()
+        rolling_std = df['close_frac'].rolling(self.bb_period).std()
 
-        buy_signal = (safe_df["close"] <= safe_df[col_bb_lower]) & safe_df["regime_ok"]
-        sell_signal = safe_df["close"] >= safe_df[col_bb_mid]
+        df['bb_lower_frac'] = rolling_mean - (rolling_std * self.bb_dev)
+        df['bb_upper_frac'] = rolling_mean + (rolling_std * self.bb_dev)
+
+        # 3. Ajuste do Sinal de Compra
+        # Lógica: Se o Preço Fracionado (que já remove a tendência) cair abaixo da banda
+        # significa um desvio estatístico REAL, não apenas uma queda de mercado.
+
+        # Removemos NaNs gerados pelo FracDiff para evitar erros
+        safe_mask = df['close_frac'].notna() & df['regime_ok']
 
         df["SIGNAL"] = "HOLD"
-        df.loc[buy_signal.index[buy_signal], "SIGNAL"] = "BUY"
-        df.loc[sell_signal.index[sell_signal], "SIGNAL"] = "SELL"
+
+        # Compra: Preço Fracionado < Banda Inferior Fracionada E Regime OK
+        buy_condition = (df['close_frac'] <= df['bb_lower_frac']) & safe_mask
+        df.loc[buy_condition, "SIGNAL"] = "BUY"
+
+        # Venda: Preço Fracionado volta à média (zero ou média móvel do frac)
+        sell_condition = (df['close_frac'] >= rolling_mean) & safe_mask
+        df.loc[sell_condition, "SIGNAL"] = "SELL"
+
 
         if self.save_logs:
             df["debug_regime_score"] = df["regime_score"]
             df["debug_regime_persistence"] = df["regime_persistence"]
             df["debug_regime_ok"] = df["regime_ok"].astype(int)
+            df["debug_close_frac"] = df["close_frac"]
+            df["debug_bb_lower_frac"] = df["bb_lower_frac"]
+
 
         return df

@@ -77,6 +77,7 @@ def init_db():
             )
         """)
         conn.commit()
+
 def save_price_data(df: pd.DataFrame, ticker: str):
     """
     Salva dados OHLCV no SQLite usando uma abordagem vetorizada robusta.
@@ -94,6 +95,16 @@ def save_price_data(df: pd.DataFrame, ticker: str):
     # 2. Achata MultiIndex (comum em algumas fontes de dados)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
+
+    # 2.1 CORREÇÃO DE SEGURANÇA: Remove tuplas residuais nas colunas
+    # Se o pandas.concat criou colunas como ('close', 'PETR4'), transformamos em 'close'
+    new_cols = []
+    for c in df.columns:
+        if isinstance(c, tuple):
+            new_cols.append(str(c[0])) # Pega o primeiro elemento da tupla
+        else:
+            new_cols.append(str(c))
+    df.columns = new_cols
 
     # 3. Remove colunas duplicadas
     df = df.loc[:, ~df.columns.duplicated()]
@@ -115,7 +126,7 @@ def save_price_data(df: pd.DataFrame, ticker: str):
         else:
             df_clean[req_final] = 0.0
 
-    # 5. Prepara dados para inserção (CORREÇÃO AQUI)
+    # 5. Prepara dados para inserção
     # Preenche NaN com 0.0
     df_clean = df_clean.fillna(0.0)
 
@@ -152,6 +163,7 @@ def save_price_data(df: pd.DataFrame, ticker: str):
             conn.commit()
     except Exception as e:
         print(f"ERRO CRÍTICO ao salvar {ticker} no banco: {e}")
+
 def load_price_data(ticker: str) -> pd.DataFrame:
     """Lê dados do banco e retorna com Index Datetime e colunas minúsculas."""
     with sqlite3.connect(DB_PATH) as conn:

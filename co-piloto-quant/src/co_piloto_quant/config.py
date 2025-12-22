@@ -18,15 +18,15 @@ PROCESSED_DATA_PATH.mkdir(parents=True, exist_ok=True)
 # Mudou aqui, muda no Backtest, no Scanner e no Robô ao mesmo tempo.
 
 # Indicadores
-BB_PERIOD = 200
+BB_PERIOD = 80
 BB_ENTRY_STD_DEV_DEFAULT = 0.45  # Parâmetro de fallback para o robô, caso não encontre no ranking
 PRICE_BB_DEVIATIONS = [0.45, 1.0, 1.5, 2.0] # 0.45 é o "Squeeze" do Sniper
-IFR_PERIOD = 120            # Período para o IFR (RSI)
+IFR_PERIOD = 14            # Período para o IFR (RSI)
 SYSTEM_PERIOD = 200         # Período para o System TPM (OBTR/WAD)
 SYSTEM_DEVIATIONS = [0.45, 1.5, 2.0] # Desvios para as bandas do System TPM
 
 # Estocástico (Ajustado para 20 conforme seu input, mas monitore se não ficará muito rápido)
-STOCH_K_PERIOD = 20
+STOCH_K_PERIOD = 14
 STOCH_K_SMOOTH = 3
 STOCH_D_SMOOTH = 3
 
