@@ -91,10 +91,12 @@ def apply_sanity_check(df: pd.DataFrame, ticker: Optional[str] = None) -> Tuple[
 
     n_suspects = int(suspect_mask.sum())
     if n_suspects > 0:
-        logger.warning("Sanity Check [%s]: %d dias suspeitos (limiar=%.3f). Interpolando close.",
+        logger.warning("Sanity Check [%s]: %d dias suspeitos (limiar=%.3f).",
                        ticker or "unknown", n_suspects, limiar)
         df.loc[suspect_mask, 'close'] = np.nan
-        df['close'] = df['close'].interpolate(method='linear').ffill().bfill()
+        # CRITICAL: Only ffill used to prevent lookahead bias
+        df['close'] = df['close'].ffill()
+        df.dropna(subset=['close'], inplace=True)
 
         with _contaminated_lock:
             _contaminated.append({ 'ticker': ticker or 'unknown', 'suspects': n_suspects })

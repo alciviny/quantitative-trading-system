@@ -29,27 +29,20 @@ except ImportError:
     except ImportError:
         median_abs_deviation = None
 
-from co_piloto_quant.strategies.mean_reversion import MeanReversionStrategy
-from co_piloto_quant.strategies.dynamic_mr import DynamicRegimeMeanReversion
+from co_piloto_quant.strategies.signal_engine import SignalEngine
 from co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
 from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
 from co_piloto_quant.indicators.names import IndicatorNames
+from co_piloto_quant.data.data_manager import data_manager
 
 ML_READY_PATH = "src/co_piloto_quant/data/ml_ready"
 CUSTO_TOTAL_TRADE = 0.0006
 DEFAULT_WORKERS = 4
 
 logger = logging.getLogger("walk_forward")
+
 _contaminated_lock = threading.Lock()
 _contaminated: List[Dict[str, int]] = []
-
-
-def setup_logging(level: int = logging.INFO) -> None:
-    handler = logging.StreamHandler()
-    fmt = "%(asctime)s - %(levelname)s - %(message)s"
-    handler.setFormatter(logging.Formatter(fmt))
-    logger.addHandler(handler)
-    logger.setLevel(level)
 
 
 def get_parquet_files(path: str = ML_READY_PATH) -> List[Path]:
@@ -86,14 +79,24 @@ def apply_sanity_check(df: pd.DataFrame, ticker: Optional[str] = None) -> Tuple[
 
     n_suspects = int(suspect_mask.sum())
     if n_suspects > 0:
-        logger.warning("Sanity Check [%s]: %d dias suspeitos. Interpolando.", ticker or "unknown", n_suspects)
+        logger.warning("Sanity Check [%s]: %d dias suspeitos", ticker or "unknown", n_suspects)
         df.loc[suspect_mask, 'close'] = np.nan
-        df['close'] = df['close'].interpolate(method='linear').ffill().bfill()
+        # CRITICAL: Only ffill used to prevent lookahead bias
+        df['close'] = df['close'].ffill()
+        df.dropna(subset=['close'], inplace=True)
 
         with _contaminated_lock:
             _contaminated.append({'ticker': ticker or 'unknown', 'suspects': n_suspects})
 
     return df, n_suspects
+
+
+def setup_logging(level: int = logging.INFO) -> None:
+    handler = logging.StreamHandler()
+    fmt = "%(asctime)s - %(levelname)s - %(message)s"
+    handler.setFormatter(logging.Formatter(fmt))
+    logger.addHandler(handler)
+    logger.setLevel(level)
 
 
 def _calculate_rolling_vol_of_vol(price_series: pd.Series, window: int = 20) -> pd.Series:
@@ -109,7 +112,7 @@ def _calculate_rolling_vol_of_vol(price_series: pd.Series, window: int = 20) -> 
 
 def calculate_missing_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    close_s = df['close'].ffill().bfill()
+    close_s = df['close'].ffill()
 
     # --- Hurst ---
     try:
@@ -189,7 +192,7 @@ def _build_rename_map(columns: List[str]) -> Dict[str, str]:
     return rename_map
 
 
-def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, close_open_trades: bool = True) -> pd.DataFrame:
+def run_strategy_simulation(df: pd.DataFrame, bb_dev: float, vol_max: float, bb_exit_std_dev: float, ticker: str, close_open_trades: bool = True) -> pd.DataFrame:
     df = df.copy().sort_index()
     df = df.loc[~df.index.duplicated(keep='last')]
     try:
@@ -356,7 +359,7 @@ def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, close_open_
     return pd.DataFrame(trades)
 
 
-def process_file_window(file_path: Path, strategy, df_train: pd.DataFrame, df_test: pd.DataFrame, 
+def process_file_window(file_path: Path, bb_dev: float, vol_max: float, bb_exit_std_dev: float, df_train: pd.DataFrame, df_test: pd.DataFrame, 
                        window_name: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Processa um arquivo para treino E teste em uma janela específica"""
     try:
@@ -488,48 +491,27 @@ def main():
     setup_logging()
     parser = argparse.ArgumentParser(description='Walk-Forward Validation')
     
-    parser.add_argument('--strategy', choices=['mean-reversion', 'adaptive-sniper', 'dynamic-mr'], default='dynamic-mr')
-    parser.add_argument('--bb-std', type=float, default=1.5)
-    parser.add_argument('--rsi-period', type=int, default=120)
-    parser.add_argument('--bb-std-volatile', type=float, default=2.5)
-    parser.add_argument('--disable-adaptive-rsi', action='store_true')
-    parser.add_argument('--disable-adaptive-bb', action='store_true')
-    parser.add_argument('--disable-regime-filter', action='store_true')
-    parser.add_argument('--max-half-life', type=int, default=25)
+    parser.add_argument('--bb-dev', type=float, default=0.5,
+                        help='Standard deviation multiplier for Kalman Bands (entry).')
+    parser.add_argument('--vol-max', type=float, default=1.5,
+                        help='Maximum volatility ratio for entry.')
+    parser.add_argument('--bb-exit-std-dev', type=float, default=2.0,
+                        help='Standard deviation multiplier for Kalman Bands (exit).')
     parser.add_argument('--out', type=str, default=None)
     parser.add_argument('--workers', type=int, default=8)
 
     args = parser.parse_args()
     files = get_parquet_files()
 
-    if args.strategy == 'dynamic-mr':
-        # PARÂMETROS OTIMIZADOS PARA VELOCIDADE E GERAÇÃO DE TRADES
-        strategy = DynamicRegimeMeanReversion(
-            lookback_regime=252,          # Lookback original que requer warm-up
-            hurst_window=72,              
-            entropy_window=20,            
-            regime_score_threshold=0.60,  # Reduzido para facilitar mais sinais
-            regime_persistence_window=3,  # Reduzido para ser mais reativo
-            bb_period=20,
-            bb_dev=2.0,
-            save_logs=False               # Desligado para acelerar a execução
-        )
-        # Ajuste de custos para "Realidade Institucional"
-        global CUSTO_TOTAL_TRADE
-        CUSTO_TOTAL_TRADE = 0.0012  # 0.12% total (Slippage + Taxas)
-        
-    elif args.strategy == 'mean-reversion':
-        strategy = MeanReversionStrategy(
-            bb_std_dev=args.bb_std, 
-            rsi_period=args.rsi_period,
-            bb_std_dev_volatile=args.bb_std_volatile,
-            adaptive_rsi=not args.disable_adaptive_rsi,
-            adaptive_bb=not args.disable_adaptive_bb,
-            use_regime_filter=not args.disable_regime_filter,
-            max_half_life=args.max_half_life
-        )
+    bb_dev = args.bb_dev
+    vol_max = args.vol_max
+    bb_exit_std_dev = args.bb_exit_std_dev
 
-    logger.info('Estratégia: %s', strategy.get_name())
+    # Ajuste de custos para "Realidade Institucional"
+    global CUSTO_TOTAL_TRADE
+    CUSTO_TOTAL_TRADE = 0.0012  # 0.12% total (Slippage + Taxas)
+
+    logger.info(f'Estratégia: SignalEngine (BB_Dev={bb_dev}, Vol_Max={vol_max}, BB_Exit_Std_Dev={bb_exit_std_dev})')
 
     # Lê todos os dados para determinar as janelas
     logger.info('Lendo dados para determinar períodos disponíveis...')
@@ -570,7 +552,7 @@ def main():
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
             futures = {}
             for fp in files:
-                future = ex.submit(process_file_window, fp, strategy, train_dates, test_dates, window_name)
+                future = ex.submit(process_file_window, fp, bb_dev, vol_max, bb_exit_std_dev, train_dates, test_dates, window_name)
                 futures[future] = fp
             
             for f in tqdm(as_completed(futures), total=len(futures), desc=f'Janela {window_name}'):
