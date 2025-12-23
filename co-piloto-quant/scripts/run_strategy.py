@@ -20,8 +20,8 @@ from joblib import Parallel, delayed
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # --- 2. IMPORTS DOS MÓDULOS DO PROJETO ---
-# Importa as engines de análise e precificação
-from src.co_piloto_quant.analysis import calculate_indicators, check_rules
+# Importa a nova classe de estratégia
+from src.co_piloto_quant.strategies.options_strategy import OptionsStrategy
 # Reutiliza a lógica de busca e processamento de opções do scanner
 # (Idealmente, estas funções estariam em um módulo em `src`, como `options_analyzer.py`)
 from scripts.scan_options import fetch_option_chain, process_option
@@ -40,10 +40,8 @@ def get_underlying_data(ticker):
 
         # Garante que os nomes das colunas sejam simples (sem MultiIndex) e minúsculos.
         if isinstance(hist_data.columns, pd.MultiIndex):
-            # No caso de MultiIndex (ex: [('Close', 'PETR4.SA')]), mantém apenas o primeiro nível.
             hist_data.columns = hist_data.columns.get_level_values(0)
 
-        # Converte todas as colunas para minúsculas para padronizar (ex: 'Close' -> 'close').
         hist_data.columns = [col.lower() for col in hist_data.columns]
 
         spot_price = hist_data['close'].iloc[-1]
@@ -64,44 +62,36 @@ def run_strategy(ticker: str):
     if df_hist is None:
         return
 
-    # Calcula indicadores e regras
-    df_indicators = calculate_indicators(df_hist)
+    # Instancia e executa a estratégia para obter os sinais
+    strategy = OptionsStrategy()
+    df_evaluated = strategy.evaluate(df_hist, ticker)
     
-    # --- MODO DE TESTE (COMENTE A LINHA ORIGINAL ABAIXO) ---
-    # rules_result = check_rules(df_indicators) # <--- Linha original comentada
+    # Pega o último sinal e os dados mais recentes
+    latest_signal = df_evaluated['SIGNAL'].iloc[-1]
+    latest_data = df_evaluated.iloc[-1]
     
-    print("\n⚠️ MODO DE TESTE ATIVADO: Forçando sinal de COMPRA em PETR4...")
-    rules_result = {
-        'Sinal_Compra': True,      # Forçando TRUE para testar o fluxo de Call
-        'Sinal_Venda': False,
-        'Motivo_Bloqueio': 'Teste de Integração (Sinal Forçado)'
-    }
-    # -------------------------------------------------------
+    print(f"Sinal Direcional Gerado: {latest_signal}")
 
-    # Extrai informações de diagnóstico do último registro
-    latest_data = df_indicators.iloc[-1]
     diagnostico = {
         "Preço Spot": f"R$ {spot_price:.2f}",
-        "Sinal": rules_result.get('Motivo_Bloqueio', 'NEUTRO'),
-        "Hurst": f"{latest_data.get('Hurst_72_returns', 0):.2f}",
-        "Entropia": f"{latest_data.get('Entropy_20', 0):.2f}",
-        "Half-Life": f"{latest_data.get('HalfLife_60', 0):.0f} dias"
+        "Sinal": latest_signal,
+        "Hurst": f"{latest_data.get(IndicatorNames.hurst_z(72), 0):.2f}",
+        "Entropia": f"{latest_data.get(IndicatorNames.entropy_z(20), 0):.2f}",
+        "Half-Life": f"{latest_data.get('HalfLife_60', 0):.0f} dias" # Este indicador pode não estar presente
     }
 
     # Decide a direção
     option_type = None
-    if rules_result.get('Sinal_Compra', False):
+    if latest_signal == 'COMPRA':
         option_type = 'call'
         delta_range = (0.40, 0.60)
         print("sinal de COMPRA detectado. Buscando CALLs...")
-    elif rules_result.get('Sinal_Venda', False):
+    elif latest_signal == 'VENDA':
         option_type = 'put'
-        # Delta de PUT é negativo
-        delta_range = (-0.60, -0.40)
+        delta_range = (-0.60, -0.40) # Delta de PUT é negativo
         print("sinal de VENDA detectado. Buscando PUTs...")
     else:
         print("Sinal NEUTRO. Nenhuma operação de opção recomendada.")
-        # Imprime o relatório final mesmo se for neutro
         print_report(diagnostico)
         return
 

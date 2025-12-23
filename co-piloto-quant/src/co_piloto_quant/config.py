@@ -77,7 +77,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 if __name__ == '__main__':
-    print(f"✅ Configuração Carregada.")
+    print(f" Configuração Carregada.")
     print(f"   Raiz: {PROJECT_ROOT}")
     print(f"   Modo Risco: {RISK_MODE}")
     print(f"   Filtros Forenses Ativos: Vol<{FILTER_MAX_VOLATILITY}%, Entropy<{FILTER_MAX_RAW_ENTROPY}")

@@ -13,7 +13,7 @@ from co_piloto_quant.analysis import calculate_indicators
 from co_piloto_quant.universe import get_expanded_universe
 from co_piloto_quant.config import BB_PERIOD, STOCH_K_PERIOD, STOCH_K_SMOOTH
 from co_piloto_quant.indicators.names import IndicatorNames
-from co_piloto_quant.strategies.vectorized import generate_signals_vectorized
+from co_piloto_quant.strategies.signal_engine import SignalEngine
 
 # ===================== CONFIGURAÇÃO DO SWEEP =====================
 
@@ -96,7 +96,7 @@ def run_matrix_optimization(ticker: str):
     # ===================== GERAÇÃO DE SINAIS (VETORIZADA) =====================
     # A lógica complexa de sinais foi movida para o "cérebro" da estratégia.
     # Este script apenas consome a função, passando os parâmetros.
-    entries_2d, exits_2d = generate_signals_vectorized(
+    entries_2d, exits_2d = SignalEngine.generate_signals(
         high=df['high'],
         low=df['low'],
         close=closes,

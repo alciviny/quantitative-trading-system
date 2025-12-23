@@ -101,10 +101,14 @@ class DataManager:
 
                 if df_external is not None and not df_external.empty:
                     df_merged = self._merge_data(df_local, df_external)
-                    self.save_data(ticker, df_merged)
-                    return df_merged
+                    df_cleaned = self._clean_price_data(df_merged)
+                    self.save_data(ticker, df_cleaned)
+                    return df_cleaned
 
-            return df_local if df_local is not None else pd.DataFrame()
+            if df_local is not None:
+                return self._clean_price_data(df_local)
+
+            return pd.DataFrame()
 
     # ===============================================================
     # PERSISTÊNCIA + VERSIONAMENTO
@@ -169,6 +173,29 @@ class DataManager:
     # ===============================================================
     # UTILITÁRIOS
     # ===============================================================
+
+    @staticmethod
+    def _clean_price_data(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Preenche dados faltantes usando apenas ffill para evitar lookahead bias.
+        Garante que as colunas OHLC existam.
+        """
+        if df.empty:
+            return df
+
+        cols = ['open', 'high', 'low', 'close', 'volume']
+        # Garante que as colunas existam, preenchendo com NaN se necessário
+        for col in cols:
+            if col not in df.columns:
+                df[col] = float('nan')
+        
+        # CRITICAL: Only ffill used to prevent lookahead bias
+        df[cols] = df[cols].ffill()
+
+        # Remove quaisquer linhas restantes com NaN no 'close' (geralmente no início)
+        df.dropna(subset=['close'], inplace=True)
+
+        return df
 
     @staticmethod
     def _merge_data(
