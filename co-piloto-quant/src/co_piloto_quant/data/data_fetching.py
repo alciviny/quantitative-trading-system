@@ -5,9 +5,23 @@ import yfinance as yf
 import pandas as pd
 import logging
 from typing import Optional
+import os
+import sys
+from contextlib import contextmanager
 
 # Configura um logger para este módulo
 logger = logging.getLogger(__name__)
+
+@contextmanager
+def suppress_stdout_stderr():
+    """A context manager that redirects stdout and stderr to devnull"""
+    with open(os.devnull, 'w') as fnull:
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = fnull, fnull
+        try:
+            yield
+        finally:
+            sys.stdout, sys.stderr = old_stdout, old_stderr
 
 def fetch_data(
     ticker: str,
@@ -33,15 +47,16 @@ def fetch_data(
         logger.debug(f"Iniciando download para {ticker}...")
         
         # yfinance lida com a priorização de start/end sobre period
-        data = yf.download(
-            ticker,
-            start=start,
-            end=end,
-            period=period,
-            interval=interval,
-            progress=False,
-            auto_adjust=True,  # Geralmente recomendado para obter preços ajustados
-        )
+        with suppress_stdout_stderr():
+            data = yf.download(
+                ticker,
+                start=start,
+                end=end,
+                period=period,
+                interval=interval,
+                progress=False,
+                auto_adjust=True,  # Geralmente recomendado para obter preços ajustados
+            )
 
         if data.empty:
             logger.warning(f"Nenhum dado retornado para {ticker} no período solicitado.")
