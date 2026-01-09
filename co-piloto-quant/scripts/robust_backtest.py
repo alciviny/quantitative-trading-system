@@ -1,340 +1,245 @@
 """
-Robust Walk-Forward Backtest + Stress Tests + Drawdown + Kelly Sizing
+Strategy-Driven Backtester
 Save as: scripts/robust_backtest.py
 
 O que faz:
-- Carrega dataset (data/ml_ready) e features_list.joblib
-- Executa Walk-Forward (expanding window) treinando um RandomForest em cada fold
-- Calcula retornos brutos e líquidos (aplica custos, slippage)
-- Gera métricas por fold: expectancy, win-rate, avg win/loss, total PnL, max drawdown, approx Sharpe
-- Realiza stress tests: aumento de slippage, remoção dos top trades, adição de ruído nas retornos
-- Calcula Kelly fracionado sugerido por fold
-- Salva relatórios CSV e gráficos em reports/wfa
-
-Notas:
-- Ajuste os parâmetros de mercado (COMMISSION_PER_TRADE, SLIPPAGE_PCT) conforme seu ativo/mercado.
-- O script treina modelos RF por fold para simular o pipeline de produção (retrain regular).
-
+- Carrega um dataset de preços para um ativo específico.
+- Processa o dataset para adicionar indicadores técnicos.
+- Carrega e instancia dinamicamente uma classe de Estratégia (ex: VolatileMomentumProfessional).
+- Executa a lógica da estratégia para gerar sinais de COMPRA/VENDA.
+- Simula a execução desses sinais em um loop de backtest simples (não-vetorizado).
+- Calcula e exibe as métricas de performance da estratégia.
 """
 
-import os
-import sys
-import joblib
+import importlib
 import logging
-from pathlib import Path
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.utils import resample
+import numpy as np
+from pathlib import Path
+
+# Supondo que essas funções existem e estão acessíveis
+# Se elas não estiverem no path, pode ser necessário ajustar o sys.path
+from co_piloto_quant.data.database import load_price_data
+from co_piloto_quant.data.data_processing import process_data
+from co_piloto_quant.strategies.base import Strategy
 
 # --------------------------
 # Config
 # --------------------------
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
-logger = logging.getLogger('WFA')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger('StrategyBacktester')
 
-DATA_DIR = Path('data/ml_ready')
-MODEL_DIR = Path('models')
-OUT_DIR = Path('reports/wfa')
-OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-# Market/costs assumptions (adjust)
-COMMISSION_PER_TRADE = 0.001   # 0.1% per side
-SLIPPAGE_PCT = 0.001           # 0.1% per side
-
-# Walk-forward params
-N_FOLDS = 5                    # number of test folds
-MIN_TRADE_COUNT = 10
-RANDOM_STATE = 42
-
-# Stress test configs
-STRESS_CONFIGS = [
-    {'name': 'base', 'extra_slippage': 0.0, 'remove_top_pct': 0.0, 'noise_std': 0.0},
-    {'name': 'high_slippage', 'extra_slippage': 0.002, 'remove_top_pct': 0.0, 'noise_std': 0.0},
-    {'name': 'remove_top10pct', 'extra_slippage': 0.0, 'remove_top_pct': 0.10, 'noise_std': 0.0},
-    {'name': 'noisy_returns', 'extra_slippage': 0.0, 'remove_top_pct': 0.0, 'noise_std': 0.01},
-]
+# --- Parâmetros do Backtest ---
+TICKER = 'PETR4'  # Ativo para testar
+STRATEGY_CLASS_NAME = 'VolatileMomentumProfessional'  # Nome da classe da Estratégia
+STRATEGY_MODULE_PATH = 'co_piloto_quant.strategies.volatile_momentum_professional' # Caminho para o módulo da estratégia
+INITIAL_CAPITAL = 100_000
+COMMISSION_PER_TRADE_PCT = 0.001 # 0.1% por operação (compra/venda)
 
 # --------------------------
-# Utilities
+# Carregador de Estratégia
 # --------------------------
 
-def apply_execution_costs_array(raw_returns, slippage=SLIPPAGE_PCT, commission=COMMISSION_PER_TRADE, extra_slippage=0.0):
-    total_slippage = 2 * (slippage + extra_slippage)
-    total_comm = 2 * commission
-    net = raw_returns - total_slippage - total_comm
-    return net
-
-
-def bootstrap_mean_ci(arr, n_iter=2000, alpha=0.05):
-    if len(arr) == 0:
-        return np.nan, (np.nan, np.nan)
-    means = []
-    for _ in range(n_iter):
-        sample = resample(arr, replace=True, n_samples=len(arr))
-        means.append(np.mean(sample))
-    lower = np.percentile(means, 100 * alpha / 2)
-    upper = np.percentile(means, 100 * (1 - alpha / 2))
-    return np.mean(means), (lower, upper)
-
-
-def max_drawdown(cum_returns):
-    # cum_returns: series of cumulative returns (e.g. (1+ret).cumprod()-1)
-    peak = np.maximum.accumulate(cum_returns)
-    dd = (cum_returns - peak) / (peak + 1e-12)
-    return abs(dd.min())
-
-
-def kelly_fraction(win_rate, payoff_ratio):
-    # payoff_ratio = avg_win / avg_loss
-    if payoff_ratio == 0:
-        return 0.0
+def load_strategy(module_path: str, class_name: str) -> Strategy:
+    """Carrega dinamicamente uma classe de estratégia a partir de seu módulo e nome."""
     try:
-        k = (win_rate - (1 - win_rate) / payoff_ratio)
-        return max(k, 0.0)
-    except Exception:
-        return 0.0
+        module = importlib.import_module(module_path)
+        strategy_class = getattr(module, class_name)
+        return strategy_class() # Instancia com parâmetros padrão
+    except (ImportError, AttributeError) as e:
+        logger.error(f"Não foi possível carregar a estratégia '{class_name}' de '{module_path}': {e}")
+        raise
 
 # --------------------------
-# Main WFA routine
+# Motor de Backtest Simples
 # --------------------------
 
-def walk_forward_analysis(df, features, target_col='target_class_5d', return_col='target_ret_5d', n_folds=N_FOLDS):
-    df = df.sort_values('data_pregao').reset_index(drop=True)
-    n = len(df)
-    fold_size = n // (n_folds + 1)  # leaving final chunk as last test
+def run_simple_backtest(df_signals: pd.DataFrame, initial_capital: float, commission_pct: float):
+    """
+    Executa um backtest iterativo baseado nos sinais de uma estratégia.
+    """
+    if 'SIGNAL' not in df_signals.columns:
+        raise ValueError("O DataFrame de sinais precisa conter a coluna 'SIGNAL'.")
 
-    folds = []
-    for k in range(1, n_folds + 1):
-        train_end = fold_size * k
-        test_start = train_end
-        test_end = min(train_end + fold_size, n)
-        train_df = df.iloc[:train_end]
-        test_df = df.iloc[test_start:test_end]
-        folds.append((train_df.reset_index(drop=True), test_df.reset_index(drop=True)))
+    trades = []
+    position = None  # None, 'LONG', or 'SHORT'
+    entry_price = 0
+    entry_date = None
+    stop_loss = None
+    profit_target = None
+    max_hold_days = 7 # Padrão da estratégia, pode ser pego da instância no futuro
 
-    fold_results = []
+    for i, row in df_signals.iterrows():
+        # --- Lógica de Saída de Posição ---
+        if position:
+            exit_price = None
+            exit_reason = None
+            
+            # 1. Checar Stop Loss
+            if position == 'LONG' and row['low'] <= stop_loss:
+                exit_price = stop_loss
+                exit_reason = 'STOP_LOSS'
+            elif position == 'SHORT' and row['high'] >= stop_loss:
+                exit_price = stop_loss
+                exit_reason = 'STOP_LOSS'
 
-    for i, (train_df, test_df) in enumerate(folds, start=1):
-        logger.info(f"Fold {i}: train {train_df['data_pregao'].iloc[0]} -> {train_df['data_pregao'].iloc[-1]} | test {test_df['data_pregao'].iloc[0]} -> {test_df['data_pregao'].iloc[-1]}")
+            # 2. Checar Profit Target
+            if exit_price is None:
+                if position == 'LONG' and row['high'] >= profit_target:
+                    exit_price = profit_target
+                    exit_reason = 'PROFIT_TARGET'
+                elif position == 'SHORT' and row['low'] <= profit_target:
+                    exit_price = profit_target
+                    exit_reason = 'PROFIT_TARGET'
 
-        X_train = train_df[features]
-        y_train = train_df[target_col]
-        X_test = test_df[features]
-        y_test = test_df[target_col]
+            # 3. Checar Tempo Máximo de Posição
+            if exit_price is None and (row.name - entry_date).days >= max_hold_days:
+                exit_price = row['close']
+                exit_reason = 'MAX_HOLD_DAYS'
 
-        # Train model fresh on each fold to emulate production retrain
-        model = RandomForestClassifier(n_estimators=200, max_depth=6, random_state=RANDOM_STATE, n_jobs=-1)
-        model.fit(X_train, y_train)
+            # 4. Checar Sinal de Saída (Oposto)
+            if exit_price is None:
+                if position == 'LONG' and row['SIGNAL'] == 'SELL':
+                    exit_price = row['close']
+                    exit_reason = 'SIGNAL_EXIT'
+                elif position == 'SHORT' and row['SIGNAL'] == 'BUY':
+                    exit_price = row['close']
+                    exit_reason = 'SIGNAL_EXIT'
 
-        probs = model.predict_proba(X_test)[:, 1]
-        test_df = test_df.copy()
-        test_df['prob'] = probs
+            if exit_price:
+                # Calcular resultado do trade
+                if position == 'LONG':
+                    pnl = (exit_price - entry_price) / entry_price
+                else: # SHORT
+                    pnl = (entry_price - exit_price) / entry_price
+                
+                # Aplicar custos
+                pnl -= 2 * commission_pct # Custo de entrada e saída
+                
+                trades.append({
+                    'entry_date': entry_date,
+                    'exit_date': row.name,
+                    'position_type': position,
+                    'entry_price': entry_price,
+                    'exit_price': exit_price,
+                    'pnl_pct': pnl,
+                    'exit_reason': exit_reason
+                })
+                position, entry_price, entry_date, stop_loss, profit_target = None, 0, None, None, None
 
-        # Evaluate across a standard threshold set
-        thresholds = np.arange(0.50, 0.81, 0.01)
-        results = []
+        # --- Lógica de Entrada de Posição ---
+        if not position:
+            if row['SIGNAL'] == 'BUY':
+                position = 'LONG'
+                entry_price = row['close'] # Simplificação: assume entrada no fechamento
+                entry_date = row.name
+                stop_loss = row['STOP_LOSS']
+                profit_target = row['PROFIT_TARGET']
+            elif row['SIGNAL'] == 'SELL':
+                position = 'SHORT'
+                entry_price = row['close']
+                entry_date = row.name
+                stop_loss = row['STOP_LOSS']
+                profit_target = row['PROFIT_TARGET']
 
-        for th in thresholds:
-            sel = test_df[test_df['prob'] >= th].copy()
-            n_trades = len(sel)
-            if n_trades < MIN_TRADE_COUNT:
-                results.append({'threshold': th, 'trades': n_trades})
-                continue
-
-            raw_returns = sel[return_col].values
-            net_returns = apply_execution_costs_array(raw_returns)
-
-            win_rate = (net_returns > 0).mean()
-            avg_win = net_returns[net_returns > 0].mean() if (net_returns > 0).sum() > 0 else 0.0
-            avg_loss = abs(net_returns[net_returns <= 0].mean()) if (net_returns <= 0).sum() > 0 else 0.0
-            payoff = (avg_win / avg_loss) if avg_loss > 0 else np.inf
-            expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
-            total_pnl = net_returns.sum()
-
-            # Cumulative and drawdown
-            cum = (1 + pd.Series(net_returns)).cumprod() - 1
-            mdd = max_drawdown(cum.values)
-
-            mean_boot, (l_boot, u_boot) = bootstrap_mean_ci(net_returns)
-
-            kelly = kelly_fraction(win_rate, payoff)
-
-            results.append({
-                'threshold': th,
-                'trades': n_trades,
-                'win_rate': win_rate,
-                'avg_win': avg_win,
-                'avg_loss': avg_loss,
-                'payoff': payoff,
-                'expectancy': expectancy,
-                'total_pnl': total_pnl,
-                'mean_net': net_returns.mean(),
-                'std_net': net_returns.std(),
-                'mdd': mdd,
-                'mean_boot': mean_boot,
-                'boot_lower': l_boot,
-                'boot_upper': u_boot,
-                'kelly': kelly
-            })
-
-        fold_results.append({'fold': i, 'train_end': train_df['data_pregao'].iloc[-1], 'test_start': test_df['data_pregao'].iloc[0], 'results': pd.DataFrame(results)})
-
-    return fold_results
-
-# --------------------------
-# Stress tests wrapper
-# --------------------------
-
-def stress_test_on_fold(original_test_df, config, return_col='target_ret_5d'):
-    df = original_test_df.copy()
-    # add noise
-    if config['noise_std'] > 0:
-        noise = np.random.normal(0, config['noise_std'], size=len(df))
-        df[return_col] = df[return_col] + noise
-    # remove top pct
-    if config['remove_top_pct'] > 0:
-        cutoff = df[return_col].quantile(1 - config['remove_top_pct'])
-        df = df[df[return_col] <= cutoff].copy()
-    return df
+    return pd.DataFrame(trades)
 
 # --------------------------
-# Aggregate and reporting
+# Análise de Resultados
 # --------------------------
+def analyze_results(trades_df: pd.DataFrame, initial_capital: float):
+    if trades_df.empty:
+        logger.warning("Nenhum trade foi executado. Não há resultados para analisar.")
+        return
 
-def run_all(df, features):
-    # Perform baseline walk-forward
-    wfa = walk_forward_analysis(df, features)
+    total_trades = len(trades_df)
+    win_trades = trades_df[trades_df['pnl_pct'] > 0]
+    loss_trades = trades_df[trades_df['pnl_pct'] <= 0]
+    
+    win_rate = len(win_trades) / total_trades if total_trades > 0 else 0
+    
+    avg_win = win_trades['pnl_pct'].mean()
+    avg_loss = loss_trades['pnl_pct'].mean()
+    
+    payoff_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else np.inf
+    
+    expectancy = (win_rate * avg_win) + ((1 - win_rate) * avg_loss)
 
-    # Save per-fold CSVs and aggregate
-    all_fold_summaries = []
-    for fr in wfa:
-        fold = fr['fold']
-        res = fr['results']
-        res.to_csv(OUT_DIR / f'fold_{fold}_threshold_scan.csv', index=False)
-        # pick best by total_pnl
-        if 'total_pnl' in res.columns:
-            valid = res.dropna(subset=['total_pnl'])
-            if len(valid):
-                best = valid.loc[valid['total_pnl'].idxmax()]
-                summary = best.to_dict()
-                summary['fold'] = fold
-                all_fold_summaries.append(summary)
+    # Calcular PnL cumulativo
+    trades_df['cumulative_pnl'] = (1 + trades_df['pnl_pct']).cumprod()
+    final_capital = initial_capital * trades_df['cumulative_pnl'].iloc[-1]
+    total_return_pct = (final_capital / initial_capital) - 1
 
-    summary_df = pd.DataFrame(all_fold_summaries)
-    if not summary_df.empty:
-        summary_df.to_csv(OUT_DIR / 'fold_best_by_pnl.csv', index=False)
+    # Calcular Drawdown
+    trades_df['capital'] = initial_capital * trades_df['cumulative_pnl']
+    peak = trades_df['capital'].cummax()
+    drawdown = (trades_df['capital'] - peak) / peak
+    max_drawdown = drawdown.min()
 
-    # Stress tests across folds: for each fold retrain and evaluate stress configs on test set
-    stress_records = []
-    for i, fr in enumerate(wfa):
-        # retrain model for this fold (same as inside walk_forward_analysis)
-        train_end = fr['train_end']
-        test_start = fr['test_start']
-        train_df = df[df['data_pregao'] <= train_end].reset_index(drop=True)
-        test_df = df[df['data_pregao'] >= test_start].reset_index(drop=True)
-
-        X_train = train_df[features]
-        y_train = train_df['target_class_5d']
-        X_test = test_df[features]
-
-        model = RandomForestClassifier(n_estimators=200, max_depth=6, random_state=RANDOM_STATE, n_jobs=-1)
-        model.fit(X_train, y_train)
-
-        probs = model.predict_proba(X_test)[:, 1]
-        test_df['prob'] = probs
-
-        # pick a reasonable threshold: best by total_pnl from precomputed fr['results']
-        results_df = fr['results']
-        if 'total_pnl' in results_df.columns and not results_df['total_pnl'].dropna().empty:
-            best_th = results_df.dropna(subset=['total_pnl']).loc[results_df['total_pnl'].idxmax(), 'threshold']
-        else:
-            best_th = 0.58
-
-        for cfg in STRESS_CONFIGS:
-            stressed = stress_test_on_fold(test_df[test_df['prob'] >= best_th], cfg)
-            # apply extra slippage/costs
-            raw = stressed['target_ret_5d'].values
-            net = apply_execution_costs_array(raw, extra_slippage=cfg['extra_slippage'])
-            n_trades = len(net)
-            if n_trades < MIN_TRADE_COUNT:
-                continue
-            win = (net > 0).mean()
-            mean_net = net.mean()
-            total_pnl = net.sum()
-            cum = (1 + pd.Series(net)).cumprod() - 1
-            mdd = max_drawdown(cum.values)
-            mean_boot, (l, u) = bootstrap_mean_ci(net)
-            stress_records.append({
-                'fold': i+1,
-                'config': cfg['name'],
-                'threshold': best_th,
-                'n_trades': n_trades,
-                'win_rate': win,
-                'mean_net': mean_net,
-                'total_pnl': total_pnl,
-                'mdd': mdd,
-                'boot_mean': mean_boot,
-                'boot_lower': l,
-                'boot_upper': u
-            })
-
-    stress_df = pd.DataFrame(stress_records)
-    stress_df.to_csv(OUT_DIR / 'stress_test_summary.csv', index=False)
-
-    logger.info(f"WFA and stress reports saved in {OUT_DIR}")
-    return wfa, summary_df, stress_df
-
+    logger.info("--- Análise de Resultados do Backtest ---")
+    logger.info(f"Período: {trades_df['entry_date'].min().date()} a {trades_df['exit_date'].max().date()}")
+    logger.info(f"Retorno Total: {total_return_pct:.2%}")
+    logger.info(f"Capital Final: ${final_capital:,.2f}")
+    logger.info(f"Drawdown Máximo: {max_drawdown:.2%}")
+    logger.info("-" * 20)
+    logger.info(f"Total de Trades: {total_trades}")
+    logger.info(f"Taxa de Acerto (Win Rate): {win_rate:.2%}")
+    logger.info(f"Payoff Ratio (Média Ganho/Média Perda): {payoff_ratio:.2f}")
+    logger.info(f"Expectativa Matemática por Trade: {expectancy:.4%}")
+    logger.info("-" * 20)
+    
 # --------------------------
 # Entrypoint
 # --------------------------
-
 def main():
-    # load data and features
+    """Ponto de entrada principal do script de backtest."""
+    logger.info(f"Iniciando backtest para o ativo '{TICKER}'...")
+    
+    # 1. Carregar Dados
+    # Usando uma data de fim para garantir que o backtest não pegue dados muito recentes
+    # e tenha um período de teste definido.
     try:
-        df = pd.read_parquet(DATA_DIR)
-        df = df.dropna().sort_values('data_pregao')
+        raw_data = load_price_data(TICKER, end_date='2024-12-31')
+        if raw_data is None or raw_data.empty:
+            logger.error(f"Não foram encontrados dados para o ticker {TICKER}.")
+            return
+        logger.info(f"Dados carregados: {len(raw_data)} candles de {raw_data.index.min().date()} a {raw_data.index.max().date()}")
     except Exception as e:
-        logger.error(f"Erro ao carregar dados: {e}")
+        logger.error(f"Falha ao carregar dados: {e}")
         return
 
-    try:
-        features = joblib.load(MODEL_DIR / 'features_list.joblib')
-    except Exception as e:
-        logger.error(f"Erro ao carregar features_list.joblib: {e}")
+    # 2. Processar Dados para adicionar indicadores
+    # Esta etapa enriquece o dataframe com indicadores que a estratégia pode usar.
+    enriched_df = process_data(raw_data)
+    logger.info("Dados processados e indicadores adicionados.")
+
+    # 3. Carregar e aplicar a Estratégia
+    logger.info(f"Carregando estratégia: '{STRATEGY_CLASS_NAME}'")
+    strategy = load_strategy(STRATEGY_MODULE_PATH, STRATEGY_CLASS_NAME)
+    
+    logger.info("Executando a lógica da estratégia para gerar sinais...")
+    # O método `calculate_signals` agora tem a correção de regime e usa indicadores pré-calculados
+    df_with_signals = strategy.calculate_signals(enriched_df)
+    
+    buy_signals = len(df_with_signals[df_with_signals['SIGNAL'] == 'BUY'])
+    sell_signals = len(df_with_signals[df_with_signals['SIGNAL'] == 'SELL'])
+    logger.info(f"Sinais gerados: {buy_signals} de Compra, {sell_signals} de Venda.")
+
+    if buy_signals == 0 and sell_signals == 0:
+        logger.warning("A estratégia não gerou nenhum sinal de Compra ou Venda. Verifique a lógica e os dados.")
         return
 
-    # Sanity check
-    if 'target_ret_5d' not in df.columns or 'target_class_5d' not in df.columns:
-        logger.error('Colunas target_ret_5d ou target_class_5d ausentes do dataset. Ajuste e rode novamente.')
-        return
+    # 4. Executar o Backtest
+    logger.info("Iniciando simulação de trades...")
+    trades_df = run_simple_backtest(df_with_signals, INITIAL_CAPITAL, COMMISSION_PER_TRADE_PCT)
+    
+    # 5. Analisar e mostrar os resultados
+    if not trades_df.empty:
+        analyze_results(trades_df, INITIAL_CAPITAL)
+    else:
+        logger.warning("A simulação não resultou em nenhum trade executado.")
 
-    wfa, summary_df, stress_df = run_all(df, features)
-
-    # Small visualization: aggregate expectancy per fold best threshold
-    agg = []
-    for fr in wfa:
-        fold = fr['fold']
-        res = fr['results']
-        if 'expectancy' in res.columns:
-            best = res.loc[res['expectancy'].idxmax()] if res['expectancy'].dropna().size else None
-            if best is not None:
-                agg.append({'fold': fold, 'best_expectancy': best['expectancy'], 'threshold': best['threshold'], 'trades': best['trades']})
-
-    if len(agg):
-        pv = pd.DataFrame(agg)
-        pv.to_csv(OUT_DIR / 'fold_best_expectancy_summary.csv', index=False)
-        plt.figure(figsize=(8,4))
-        plt.bar(pv['fold'], pv['best_expectancy'])
-        plt.xlabel('Fold')
-        plt.ylabel('Best Expectancy')
-        plt.title('Best Expectancy per Fold')
-        plt.tight_layout()
-        plt.savefig(OUT_DIR / 'best_expectancy_per_fold.png', dpi=150)
-        plt.close()
-
-    logger.info('Finished WFA pipeline.')
+    logger.info("Backtest finalizado.")
 
 if __name__ == '__main__':
     main()

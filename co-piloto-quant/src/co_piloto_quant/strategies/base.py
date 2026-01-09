@@ -121,28 +121,42 @@ class AdaptiveSniperStrategy(Strategy):
 
         col_stoch_k = IndicatorNames.stochastic_k(STOCH_K_PERIOD, STOCH_K_SMOOTH)
         col_wwma = IndicatorNames.wwma(200)
-        col_hurst_z = IndicatorNames.hurst_z(HURST_WINDOW)
+        col_hurst_raw = IndicatorNames.hurst_z(HURST_WINDOW) # Nome original da coluna é hurst_z, mas é o valor bruto
         col_entropy_z = IndicatorNames.entropy_z(20)
 
         df['SIGNAL'] = 'HOLD'
 
-        required_cols = [col_bb_upper, col_bb_lower, col_stoch_k, col_hurst_z, col_entropy_z, col_bb_upper_exit]
+        required_cols = [col_bb_upper, col_bb_lower, col_stoch_k, col_hurst_raw, col_entropy_z, col_bb_upper_exit]
         if any(c not in df.columns for c in required_cols):
+            # Adicionado log para clareza
+            missing = [c for c in required_cols if c not in df.columns]
+            print(f"Alerta [AdaptiveSniper]: Faltando colunas essenciais: {missing}. Nenhum sinal será gerado.")
             return df
 
         # --- REGIME ---
-        hurst = safe_series(col_hurst_z, 0.0)
+        hurst_raw = safe_series(col_hurst_raw, 0.5)
         entropy = safe_series(col_entropy_z, 10.0)
 
-        mask_regime_ok = (hurst >= -0.5) & (entropy <= self.entropy_chaos_threshold)
+        # AJUSTE CRÍTICO: Correção do uso do Hurst.
+        # O valor bruto (0-1) não deve ser comparado com -0.5. Calculamos o Z-Score para normalizá-lo.
+        # Um Z-Score > 0.5 indica que o mercado está estatisticamente mais em tendência do que sua média recente.
+        hurst_mean = hurst_raw.rolling(252, min_periods=30).mean()
+        hurst_std = hurst_raw.rolling(252, min_periods=30).std()
+        hurst_z_score = (hurst_raw - hurst_mean) / hurst_std
+        
+        # O filtro de regime agora busca períodos com tendência estatisticamente relevante e baixa entropia (não-caótico).
+        mask_regime_ok = (hurst_z_score > 0.5) & (entropy <= self.entropy_chaos_threshold)
+
 
         # --- BUY ---
         close = df['close']
         bb_lower = df[col_bb_lower]
-        bb_upper = df[col_bb_upper]
         stoch = df[col_stoch_k]
 
-        mask_buy_zone = (close >= bb_lower) & (close <= bb_upper)
+        # AJUSTE LÓGICO: Mudança para uma entrada "Sniper" verdadeira.
+        # Em vez de comprar DENTRO das bandas (reversão à média), compramos no EXTREMO (toque na banda inferior).
+        # Isso alinha a entrada com a ideia de "sniper", pegando o ponto de possível virada.
+        mask_buy_zone = close <= bb_lower
         mask_stoch_buy = stoch < 30
 
         mask_flow_buy = pd.Series(True, index=df.index)
@@ -182,5 +196,8 @@ class AdaptiveSniperStrategy(Strategy):
         df['STOP_LOSS'] = np.nan
         df.loc[final_buy_signal, 'STOP_LOSS'] = bb_lower
         df.loc[final_sell_signal, 'STOP_LOSS'] = df[col_bb_upper_exit]
+
+        # Adiciona os valores calculados para análise e logging
+        df['hurst_z_score'] = hurst_z_score
 
         return df

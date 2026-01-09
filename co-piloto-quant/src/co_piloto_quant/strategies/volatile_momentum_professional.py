@@ -117,50 +117,94 @@ class VolatileMomentumProfessional(Strategy):
     
     def _calculate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
-        
         close = df['close']
-        atr = self._calculate_atr(df, self.atr_period)
+
+        # --- Otimização: Evitar recálculo de indicadores se já existirem ---
+        atr = df['ATR'] if 'ATR' in df.columns else self._calculate_atr(df, self.atr_period)
         
-        ema_fast = self._calculate_ema(close, self.ema_fast)
-        ema_slow = self._calculate_ema(close, self.ema_slow)
-        macd_line, signal_line, histogram = self._calculate_macd(df)
-        
-        upper_bb, middle_bb, lower_bb = self._calculate_bollinger_bands(df)
-        
+        # --- Otimização para EMAs ---
+        ema_fast_col = f'EMA_{self.ema_fast}'
+        ema_slow_col = f'EMA_{self.ema_slow}'
+        if ema_fast_col in df.columns and ema_slow_col in df.columns:
+            ema_fast = df[ema_fast_col]
+            ema_slow = df[ema_slow_col]
+        else:
+            ema_fast = self._calculate_ema(close, self.ema_fast)
+            ema_slow = self._calculate_ema(close, self.ema_slow)
+            
+        # --- Otimização para MACD ---
+        if 'MACD' in df.columns and 'MACD_HIST' in df.columns:
+            macd_line = df['MACD']
+            histogram = df['MACD_HIST']
+        else:
+            macd_line, _, histogram = self._calculate_macd(df)
+
+        # --- Otimização: Usar Bandas de Bollinger pré-calculadas se disponíveis ---
+        bb_cols = ['BB_upper', 'BB_middle', 'BB_lower']
+        if all(col in df.columns for col in bb_cols):
+            upper_bb = df['BB_upper']
+            middle_bb = df['BB_middle']
+            lower_bb = df['BB_lower']
+        else:
+            upper_bb, middle_bb, lower_bb = self._calculate_bollinger_bands(df)
+
         trend = np.where(ema_fast > ema_slow, 'UP', 'DOWN')
         momentum_bullish = histogram > 0
         momentum_bearish = histogram < 0
-        
-        regime = df.get('REGIME', pd.Series(['UNKNOWN'] * len(df), index=df.index))
+
+        # --- Correção Crítica: Adicionado cálculo de fallback para REGIME para evitar falha silenciosa ---
+        if 'REGIME' not in df.columns:
+            # Se a coluna REGIME não for fornecida, calculamos um regime simplificado.
+            # Usamos o ATR normalizado como um proxy para volatilidade.
+            normalized_atr = (atr / close) * 100
+            is_volatile = normalized_atr > 2.5  # Limiar arbitrário para mercado "volátil"
+
+            # Usamos a EMA lenta como um filtro de tendência simples.
+            is_bull = close > ema_slow
+            is_bear = close < ema_slow
+
+            # Combina as condições para criar quatro estados de regime.
+            conditions = [
+                is_bull & is_volatile,
+                is_bear & is_volatile,
+                is_bull & ~is_volatile,
+                is_bear & ~is_volatile
+            ]
+            choices = ['BULL_VOLATILE', 'BEAR_VOLATILE', 'BULL_CALM', 'BEAR_CALM']
+            df['REGIME'] = np.select(conditions, choices, default='UNKNOWN')
+
+        regime = df['REGIME']
         in_target_regime = regime.isin(self.target_regimes)
-        
+
         df['SIGNAL'] = 'HOLD'
-        
+
         long_signal = (
-            (trend == 'UP') & 
+            (trend == 'UP') &
             momentum_bullish &
             in_target_regime &
-            (close <= middle_bb)
+            (close <= middle_bb) # Entrada em pullback na média
         )
-        
+
         short_signal = (
-            (trend == 'DOWN') & 
+            (trend == 'DOWN') &
             momentum_bearish &
             in_target_regime &
-            (close >= middle_bb)
+            (close >= middle_bb) # Entrada em repique na média
         )
-        
+
         df.loc[long_signal, 'SIGNAL'] = 'BUY'
         df.loc[short_signal, 'SIGNAL'] = 'SELL'
-        
+
+        # --- Cálculos de Saída ---
         df['STOP_LOSS'] = np.nan
         df.loc[long_signal, 'STOP_LOSS'] = df.loc[long_signal, 'close'] - (atr[long_signal] * self.atr_stop_multiplier)
         df.loc[short_signal, 'STOP_LOSS'] = df.loc[short_signal, 'close'] + (atr[short_signal] * self.atr_stop_multiplier)
-        
+
         df['PROFIT_TARGET'] = np.nan
         df.loc[long_signal, 'PROFIT_TARGET'] = df.loc[long_signal, 'close'] + (atr[long_signal] * self.atr_profit_multiplier)
         df.loc[short_signal, 'PROFIT_TARGET'] = df.loc[short_signal, 'close'] - (atr[short_signal] * self.atr_profit_multiplier)
-        
+
+        # --- Adicionar colunas de diagnóstico para análise ---
         df['ATR'] = atr
         df['TREND'] = trend
         df['MOMENTUM'] = np.where(momentum_bullish, 'BULL', 'BEAR')
@@ -169,4 +213,10 @@ class VolatileMomentumProfessional(Strategy):
         df['MACD'] = macd_line
         df['MACD_HIST'] = histogram
         
+        # Adicionar BBands ao df se foram calculadas internamente
+        if not all(col in df.columns for col in bb_cols):
+            df['BB_upper'] = upper_bb
+            df['BB_middle'] = middle_bb
+            df['BB_lower'] = lower_bb
+            
         return df
