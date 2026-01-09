@@ -1,29 +1,31 @@
-import os
 from pathlib import Path
+import os
 from dotenv import load_dotenv
 
 # Carrega variáveis de ambiente (Senhas, Tokens) de um arquivo .env se existir
 load_dotenv()
 
+
 # --- 1. ESTRUTURA DE DIRETÓRIOS ---
-# Raiz do projeto (co-piloto-quant/)
+# Detecta a raiz do projeto (assumindo que o config.py está em src/co_piloto_quant/config.py)
+# Isso torna o código robusto para ser executado de qualquer lugar.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# Caminhos de dados centralizados na raiz do projeto
-DATA_PATH = PROJECT_ROOT / "data"
-RAW_DATA_PATH = DATA_PATH / "raw"
-PROCESSED_DATA_PATH = DATA_PATH / "processed"
-RESULTS_PATH = DATA_PATH / "results"
-DATABASE_PATH = RAW_DATA_PATH / "market_data.db"
+# Define o diretório de dados principal na raiz do projeto
+DATA_DIR = PROJECT_ROOT / "data"
 
-# Caminho para modelos
-MODELS_PATH = PROJECT_ROOT / "models"
+# Cria constantes explícitas para cada subdiretório de dados
+RAW_DIR = DATA_DIR / "raw"
+PROCESSED_DIR = DATA_DIR / "processed"
+RESULTS_DIR = DATA_DIR / "results"
+MODELS_DIR = PROJECT_ROOT / "models" # Adicionado para consistência
 
-# Cria os diretórios se eles não existirem
-RAW_DATA_PATH.mkdir(parents=True, exist_ok=True)
-PROCESSED_DATA_PATH.mkdir(parents=True, exist_ok=True)
-RESULTS_PATH.mkdir(parents=True, exist_ok=True)
-MODELS_PATH.mkdir(parents=True, exist_ok=True)
+# Garante que todos os diretórios de dados existam ao iniciar
+RAW_DIR.mkdir(parents=True, exist_ok=True)
+PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # --- 2. CONFIGURAÇÕES DA ESTRATÉGIA (O CÉREBRO) ---
 # Mudou aqui, muda no Backtest, no Scanner e no Robô ao mesmo tempo.
@@ -79,7 +81,7 @@ RISK_PERCENT = 1.0         # Se usar risco percentual (1% da conta)
 
 # Ativos Permitidos (Whitelist)
 # Se vazio [], o robô pega o que estiver na "Observação de Mercado" do MT5
-TRADING_WHITELIST = [] 
+TRADING_WHITELIST = []
 # Exemplo: TRADING_WHITELIST = ['EURUSD', 'GBPUSD', 'XAUUSD']
 
 # --- 4. INTEGRAÇÕES (TELEGRAM) ---
@@ -87,9 +89,69 @@ TRADING_WHITELIST = []
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# --- 5. BANCO DE DADOS ---
+# Centraliza a definição do caminho do banco de dados
+DATABASE_PATH = RAW_DIR / "market_data.db"
+
+
+class Config:
+    """
+    Classe de configuração para agrupar todas as constantes do projeto.
+    Fornece acesso fácil e autocompletar em IDEs.
+    """
+    # Paths
+    PROJECT_ROOT = PROJECT_ROOT
+    DATA_DIR = DATA_DIR
+    RAW_DIR = RAW_DIR
+    PROCESSED_DIR = PROCESSED_DIR
+    RESULTS_DIR = RESULTS_DIR
+    MODELS_DIR = MODELS_DIR
+    DATABASE_PATH = DATABASE_PATH
+
+    # Strategy
+    BB_PERIOD = BB_PERIOD
+    BB_ENTRY_STD_DEV_DEFAULT = BB_ENTRY_STD_DEV_DEFAULT
+    PRICE_BB_DEVIATIONS = PRICE_BB_DEVIATIONS
+    IFR_PERIOD = IFR_PERIOD
+    SYSTEM_PERIOD = SYSTEM_PERIOD
+    SYSTEM_DEVIATIONS = SYSTEM_DEVIATIONS
+    STOCH_K_PERIOD = STOCH_K_PERIOD
+    STOCH_K_SMOOTH = STOCH_K_SMOOTH
+    STOCH_D_SMOOTH = STOCH_D_SMOOTH
+    HILBERT_SHORT_PERIOD = HILBERT_SHORT_PERIOD
+    HILBERT_LONG_PERIOD = HILBERT_LONG_PERIOD
+    HURST_WINDOW = HURST_WINDOW
+    ENTROPY_WINDOW = ENTROPY_WINDOW
+    REGIME_STRICTNESS = REGIME_STRICTNESS
+    HURST_THRESHOLD_TREND = HURST_THRESHOLD_TREND
+    HURST_THRESHOLD_REVERSION = HURST_THRESHOLD_REVERSION
+    ACTIVE_STRATEGY = ACTIVE_STRATEGY
+
+    # Forensic Filters
+    FILTER_MAX_VOLATILITY = FILTER_MAX_VOLATILITY
+    FILTER_MAX_RAW_ENTROPY = FILTER_MAX_RAW_ENTROPY
+
+    # MT5
+    MT5_TIMEFRAME_STR = MT5_TIMEFRAME_STR
+    MT5_MAGIC_NUMBER = MT5_MAGIC_NUMBER
+    MT5_DEVIATION = MT5_DEVIATION
+    MT5_MAX_POSITIONS = MT5_MAX_POSITIONS
+    RISK_MODE = RISK_MODE
+    FIXED_LOT_SIZE = FIXED_LOT_SIZE
+    RISK_PERCENT = RISK_PERCENT
+    TRADING_WHITELIST = TRADING_WHITELIST
+
+    # Integrations
+    TELEGRAM_TOKEN = TELEGRAM_TOKEN
+    TELEGRAM_CHAT_ID = TELEGRAM_CHAT_ID
+
+
 if __name__ == '__main__':
-    print(f" Configuração Carregada.")
-    print(f"   Raiz: {PROJECT_ROOT}")
-    print(f"   Modo Risco: {RISK_MODE}")
-    print(f"   Filtros Forenses Ativos: Vol<{FILTER_MAX_VOLATILITY}%, Entropy<{FILTER_MAX_RAW_ENTROPY}")
-    print(f"   Telegram Configurado? {'Sim' if TELEGRAM_TOKEN else 'Não'}")
+    print(f"✅ Configuração do Projeto Carregada")
+    print(f"   - Raiz do Projeto: {Config.PROJECT_ROOT}")
+    print(f"   - Diretório de Dados: {Config.DATA_DIR}")
+    print(f"   - Banco de Dados: {Config.DATABASE_PATH}")
+    print(f"   - Filtros Forenses: Volatilidade < {Config.FILTER_MAX_VOLATILITY}%, Entropia Bruta < {Config.FILTER_MAX_RAW_ENTROPY}")
+    print(f"   - Estratégia Ativa: '{Config.ACTIVE_STRATEGY}'")
+    print(f"   - Telegram Configurado: {'Sim' if Config.TELEGRAM_TOKEN else 'Não'}")
+

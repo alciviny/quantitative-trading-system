@@ -1,25 +1,18 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-walk_forward_validation.py
-Walk-Forward Testing: Valida consistência da estratégia
-Treino: 6 meses | Teste: 3 meses (sem retreinar parâmetros)
-Desliza mensalmente para frente
-"""
-
-from __future__ import annotations
-
 import argparse
 import logging
+import sys
+from pathlib import Path
 import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+
+# Adiciona o diretório raiz do projeto ao sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 try:
     from scipy.stats import median_abs_deviation
@@ -29,13 +22,13 @@ except ImportError:
     except ImportError:
         median_abs_deviation = None
 
-from co_piloto_quant.strategies.signal_engine import SignalEngine
+from co_piloto_quant.config import Config  # Importa a classe de configuração
+from co_piloto_quant.strategies.loader import load_strategy  # Importa o loader da estratégia
 from co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
 from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
 from co_piloto_quant.indicators.names import IndicatorNames
 from co_piloto_quant.data.data_manager import data_manager
 
-ML_READY_PATH = "src/co_piloto_quant/data/ml_ready"
 CUSTO_TOTAL_TRADE = 0.0006
 DEFAULT_WORKERS = 4
 
@@ -45,16 +38,12 @@ _contaminated_lock = threading.Lock()
 _contaminated: List[Dict[str, int]] = []
 
 
-def get_parquet_files(path: str = ML_READY_PATH) -> List[Path]:
-    p = Path(path)
+def get_parquet_files() -> List[Path]:
+    """Busca os arquivos parquet no diretório de dados processados."""
+    p = Config.PROCESSED_DIR
     if not p.exists():
-        alt = Path("co_piloto_quant") / path
-        if alt.exists():
-            p = alt
-        else:
-            logger.error("Não foi possível encontrar o diretório: %s", path)
-            return []
-
+        logger.error("Não foi possível encontrar o diretório de dados processados: %s", p)
+        return []
     files = sorted(p.glob("*_SA.parquet"))
     return files
 
@@ -192,7 +181,11 @@ def _build_rename_map(columns: List[str]) -> Dict[str, str]:
     return rename_map
 
 
-def run_strategy_simulation(df: pd.DataFrame, bb_dev: float, vol_max: float, bb_exit_std_dev: float, ticker: str, close_open_trades: bool = True) -> pd.DataFrame:
+def run_strategy_simulation(df: pd.DataFrame, strategy, ticker: str, close_open_trades: bool = True) -> pd.DataFrame:
+    """
+    Executa a simulação da estratégia.
+    A 'strategy' agora é passada como um argumento.
+    """
     df = df.copy().sort_index()
     df = df.loc[~df.index.duplicated(keep='last')]
     try:
@@ -359,11 +352,11 @@ def run_strategy_simulation(df: pd.DataFrame, bb_dev: float, vol_max: float, bb_
     return pd.DataFrame(trades)
 
 
-def process_file_window(file_path: Path, bb_dev: float, vol_max: float, bb_exit_std_dev: float, df_train: pd.DataFrame, df_test: pd.DataFrame, 
+def process_file_window(file_path: Path, strategy, df_train: pd.DataFrame, df_test: pd.DataFrame, 
                        window_name: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Processa um arquivo para treino E teste em uma janela específica"""
     try:
-        ticker = file_path.stem.replace('_', '.')
+        ticker = file_path.stem.replace('_SA', '')
         full_df = pd.read_parquet(file_path)
 
         if 'data_pregao' in full_df.columns:
@@ -387,7 +380,6 @@ def process_file_window(file_path: Path, bb_dev: float, vol_max: float, bb_exit_
         full_df['REGIME'] = full_df['REGIME'].astype(str)
 
         # Explicitly align all columns to the main index to prevent alignment errors.
-        # This can happen if indicators loaded from files have slightly different date ranges.
         main_index = full_df.index
         for col in full_df.columns:
             if not full_df[col].index.equals(main_index):
@@ -398,24 +390,12 @@ def process_file_window(file_path: Path, bb_dev: float, vol_max: float, bb_exit_
         # ===============================
         full_df = full_df.sort_index()
 
-        # Mantém apenas linhas completas para colunas críticas
-        critical_cols = ['close']
-        critical_cols += [c for c in full_df.columns if 'bb_' in c.lower()]
-        critical_cols += [c for c in full_df.columns if 'hurst' in c.lower()]
-        critical_cols += [c for c in full_df.columns if 'entropy' in c.lower()]
-
+        critical_cols = ['close'] + [c for c in full_df.columns if 'bb_' in c.lower() or 'hurst' in c.lower() or 'entropy' in c.lower()]
         critical_cols = list(set(critical_cols))
-
         full_df = full_df.dropna(subset=critical_cols)
 
-
-        # Filtra apenas os dados da janela de treino
-        df_train_ticker = full_df[full_df.index >= df_train[0]]
-        df_train_ticker = df_train_ticker[df_train_ticker.index <= df_train[-1]].copy()
-
-        # Filtra apenas os dados da janela de treino
-        df_train_ticker = full_df[full_df.index >= df_train[0]]
-        df_train_ticker = df_train_ticker[df_train_ticker.index <= df_train[-1]].copy()
+        # Filtra dados da janela de treino
+        df_train_ticker = full_df.loc[df_train[0]:df_train[-1]].copy()
 
         trades_train = pd.DataFrame()
         trades_test = pd.DataFrame()
@@ -426,21 +406,13 @@ def process_file_window(file_path: Path, bb_dev: float, vol_max: float, bb_exit_
                 trades_train['phase'] = 'TRAIN'
                 trades_train['window'] = window_name
 
-        # --- Lógica de Teste com Período de Warm-up ---
-        # Garante que a estratégia tenha dados suficientes (ex: 252 dias de lookback)
-        # antes do início real do período de teste.
-        warmup_days = 300  # Buffer de segurança para lookbacks (ex: 252 dias)
+        # Lógica de Teste com Período de Warm-up
+        warmup_days = 300
         start_date_with_warmup = df_test[0] - pd.Timedelta(days=warmup_days)
-
-        # Filtra o dataframe para incluir o período de warm-up + teste
-        df_test_ticker_raw = full_df[full_df.index >= start_date_with_warmup]
-        df_test_ticker_raw = df_test_ticker_raw[df_test_ticker_raw.index <= df_test[-1]].copy()
+        df_test_ticker_raw = full_df.loc[start_date_with_warmup:df_test[-1]].copy()
 
         if not df_test_ticker_raw.empty:
-            # Roda a simulação no dataframe estendido (com warm-up)
             trades_test_raw = run_strategy_simulation(df_test_ticker_raw, strategy, ticker, close_open_trades=True)
-            
-            # Filtra APENAS os trades que ocorreram dentro da janela de teste oficial
             if not trades_test_raw.empty:
                 trades_test = trades_test_raw[trades_test_raw['date_entry'] >= df_test[0]].copy()
                 if not trades_test.empty:
@@ -464,16 +436,12 @@ def get_date_windows(all_dates: pd.DatetimeIndex, train_months: int = 6, test_mo
     current_train_start = start_date
     
     while True:
-        # Calcula fim do treino (6 meses depois)
         train_end = current_train_start + pd.DateOffset(months=train_months)
-        
-        # Calcula fim do teste (3 meses depois)
         test_end = train_end + pd.DateOffset(months=test_months)
         
         if test_end > end_date:
             break
         
-        # Filtra datas da janela
         train_idx = all_dates[(all_dates >= current_train_start) & (all_dates <= train_end)]
         test_idx = all_dates[(all_dates > train_end) & (all_dates <= test_end)]
         
@@ -481,7 +449,6 @@ def get_date_windows(all_dates: pd.DatetimeIndex, train_months: int = 6, test_mo
             window_name = f"{current_train_start.strftime('%Y-%m-%d')}_{train_end.strftime('%Y-%m-%d')}"
             windows.append((window_name, train_idx, test_idx))
         
-        # Avança 1 mês
         current_train_start = current_train_start + pd.DateOffset(months=1)
     
     return windows
@@ -491,51 +458,44 @@ def main():
     setup_logging()
     parser = argparse.ArgumentParser(description='Walk-Forward Validation')
     
-    parser.add_argument('--bb-dev', type=float, default=0.5,
-                        help='Standard deviation multiplier for Kalman Bands (entry).')
-    parser.add_argument('--vol-max', type=float, default=1.5,
-                        help='Maximum volatility ratio for entry.')
-    parser.add_argument('--bb-exit-std-dev', type=float, default=2.0,
-                        help='Standard deviation multiplier for Kalman Bands (exit).')
     parser.add_argument('--out', type=str, default=None)
     parser.add_argument('--workers', type=int, default=8)
 
     args = parser.parse_args()
     files = get_parquet_files()
 
-    bb_dev = args.bb_dev
-    vol_max = args.vol_max
-    bb_exit_std_dev = args.bb_exit_std_dev
+    # Carrega a estratégia uma vez
+    strategy = load_strategy(mode='backtest')
+    logger.info(f"Estratégia '{Config.ACTIVE_STRATEGY}' carregada para o backtest.")
 
     # Ajuste de custos para "Realidade Institucional"
     global CUSTO_TOTAL_TRADE
     CUSTO_TOTAL_TRADE = 0.0012  # 0.12% total (Slippage + Taxas)
 
-    logger.info(f'Estratégia: SignalEngine (BB_Dev={bb_dev}, Vol_Max={vol_max}, BB_Exit_Std_Dev={bb_exit_std_dev})')
-
     # Lê todos os dados para determinar as janelas
     logger.info('Lendo dados para determinar períodos disponíveis...')
     all_dates_list = []
     
-    for file_path in files[:1]:  # Usa primeiro arquivo para determinar range
+    # Usa o primeiro arquivo para determinar o range de datas
+    if files:
         try:
-            df = pd.read_parquet(file_path)
+            df = pd.read_parquet(files[0])
             if 'data_pregao' in df.columns:
                 dates = pd.to_datetime(df['data_pregao'])
             else:
                 dates = pd.to_datetime(df.index, errors='coerce')
-            all_dates_list.extend(dates.tolist())
-        except:
+            all_dates_list.extend(dates.dropna().tolist())
+        except Exception as e:
+            logger.error(f"Não foi possível ler as datas do arquivo inicial: {e}")
             pass
     
     if not all_dates_list:
-        logger.error('Não foi possível ler datas dos arquivos')
+        logger.error('Não foi possível ler datas dos arquivos. Encerrando.')
         return
     
     all_dates = pd.DatetimeIndex(sorted(set(all_dates_list)))
     logger.info('Período de dados: %s a %s (%d dias)', all_dates.min().date(), all_dates.max().date(), len(all_dates))
     
-    # Gera janelas
     windows = get_date_windows(all_dates, train_months=6, test_months=3)
     logger.info('Geradas %d janelas de walk-forward', len(windows))
 
@@ -550,10 +510,7 @@ def main():
         window_test_trades = []
         
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
-            futures = {}
-            for fp in files:
-                future = ex.submit(process_file_window, fp, bb_dev, vol_max, bb_exit_std_dev, train_dates, test_dates, window_name)
-                futures[future] = fp
+            futures = {ex.submit(process_file_window, fp, strategy, train_dates, test_dates, window_name): fp for fp in files}
             
             for f in tqdm(as_completed(futures), total=len(futures), desc=f'Janela {window_name}'):
                 train_trades, test_trades = f.result()
@@ -574,20 +531,16 @@ def main():
         print('🔄 WALK-FORWARD VALIDATION RESULTS')
         print('=' * 70)
         
-        # Resumo por fase (TRAIN vs TEST)
         print('\n📈 PERFORMANCE POR FASE:')
-        phase_stats = final_df.groupby('phase').agg({
-            'return': ['count', 'mean', 'sum', 'std'],
-            'win': 'mean'
-        }).round(4)
+        phase_stats = final_df.groupby('phase').agg(
+            {'return': ['count', 'mean', 'sum', 'std'], 'win': 'mean'}
+        ).round(4)
         phase_stats.columns = ['Trades', 'Avg_Return', 'Total_Return', 'Std_Dev', 'Win_Rate']
         print(phase_stats)
         
-        # Análise por janela
         print('\n🪟 PERFORMANCE POR JANELA (TREINO vs TESTE):')
         for window_name in final_df['window'].unique():
             window_data = final_df[final_df['window'] == window_name]
-            
             train_data = window_data[window_data['phase'] == 'TRAIN']
             test_data = window_data[window_data['phase'] == 'TEST']
             
@@ -598,7 +551,7 @@ def main():
                 train_trades = len(train_data)
                 print(f'    Treino: {train_trades:>3} trades, {train_ret:>8.4f} avg_ret, {train_wr:>6.2%} win_rate')
             else:
-                print(f'    Treino: sem trades')
+                print('    Treino: sem trades')
             
             if not test_data.empty:
                 test_ret = test_data['return'].mean()
@@ -607,9 +560,8 @@ def main():
                 degradation = ((test_ret - train_ret) / abs(train_ret) * 100) if train_ret != 0 else 0
                 print(f'    Teste:  {test_trades:>3} trades, {test_ret:>8.4f} avg_ret, {test_wr:>6.2%} win_rate (degradação: {degradation:>6.1f}%)')
             else:
-                print(f'    Teste:  sem trades')
+                print('    Teste:  sem trades')
         
-        # Resumo de degradação
         print('\n⚠️ ANÁLISE DE CONSISTÊNCIA:')
         train_avg_ret = final_df[final_df['phase'] == 'TRAIN']['return'].mean()
         test_avg_ret = final_df[final_df['phase'] == 'TEST']['return'].mean()
@@ -620,18 +572,18 @@ def main():
         print(f'  Degradação Geral:      {degradation_overall:.2f}%')
         
         if abs(degradation_overall) < 20:
-            print(f'  ✅ Sistema CONSISTENTE (degradação < 20%)')
+            print('  ✅ Sistema CONSISTENTE (degradação < 20%)')
         elif abs(degradation_overall) < 50:
-            print(f'  ⚠️  Sistema com DEGRADAÇÃO MODERADA (20% < degradação < 50%)')
+            print('  ⚠️  Sistema com DEGRADAÇÃO MODERADA (20% < degradação < 50%)')
         else:
-            print(f'  ❌ Sistema OVERFITTED (degradação > 50%)')
+            print('  ❌ Sistema OVERFITTED (degradação > 50%)')
         
-        # Salva resultados
         if args.out:
             out_path = Path(args.out)
         else:
-            out_path = Path('walk_forward_results.csv')
+            out_path = Config.RESULTS_DIR / 'walk_forward_results.csv'
         
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         final_df.to_csv(out_path, index=False)
         logger.info('Resultados salvos em %s', out_path)
     else:

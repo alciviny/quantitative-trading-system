@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 import os
 import numpy as np
 import pandas as pd
@@ -8,7 +9,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # ===================== CONFIGURAÇÃO DE CAMINHO =====================
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from co_piloto_quant.data.database import load_price_data
 from co_piloto_quant.strategies.vectorized import generate_signals_vectorized

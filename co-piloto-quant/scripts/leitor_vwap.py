@@ -5,14 +5,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# Adiciona o diretório raiz do projeto ao sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from co_piloto_quant.config import RESULTS_DIR
+
 # =========================================================
 # CONFIGURAÇÃO DE PASTAS
 # =========================================================
-current_dir = Path(__file__).resolve().parent
-project_root = current_dir.parent
-LAB_OUTPUT_DIR = project_root / "src" / "co_piloto_quant" / "data" / "lab_outputs"
+# O caminho agora usa a constante do arquivo de configuração
+LAB_OUTPUT_DIR = RESULTS_DIR
 SAVE_OUTPUTS = True         # Se True, salva CSVs consolidados
 PLOT_OUTPUTS = True         # Se True, plota gráficos
+
 
 # =========================================================
 # FUNÇÕES AUXILIARES
