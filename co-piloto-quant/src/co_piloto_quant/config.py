@@ -6,13 +6,24 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- 1. ESTRUTURA DE DIRETÓRIOS ---
+# Raiz do projeto (co-piloto-quant/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_PATH = PROJECT_ROOT / "src" / "co_piloto_quant" / "data"
+
+# Caminhos de dados centralizados na raiz do projeto
+DATA_PATH = PROJECT_ROOT / "data"
 RAW_DATA_PATH = DATA_PATH / "raw"
 PROCESSED_DATA_PATH = DATA_PATH / "processed"
+RESULTS_PATH = DATA_PATH / "results"
+DATABASE_PATH = RAW_DATA_PATH / "market_data.db"
 
+# Caminho para modelos
+MODELS_PATH = PROJECT_ROOT / "models"
+
+# Cria os diretórios se eles não existirem
 RAW_DATA_PATH.mkdir(parents=True, exist_ok=True)
 PROCESSED_DATA_PATH.mkdir(parents=True, exist_ok=True)
+RESULTS_PATH.mkdir(parents=True, exist_ok=True)
+MODELS_PATH.mkdir(parents=True, exist_ok=True)
 
 # --- 2. CONFIGURAÇÕES DA ESTRATÉGIA (O CÉREBRO) ---
 # Mudou aqui, muda no Backtest, no Scanner e no Robô ao mesmo tempo.

@@ -34,8 +34,10 @@ from co_piloto_quant.strategies.volatile_momentum_professional import VolatileMo
 from co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
 from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
 
+from co_piloto_quant.config import PROCESSED_DATA_PATH
+
 # --------------------------- CONFIG ---------------------------
-ML_READY_PATH = "src/co_piloto_quant/data/ml_ready"
+ML_READY_PATH = PROCESSED_DATA_PATH
 START_DATE = "2021-12-08"
 CUSTO_TOTAL_TRADE = 0.0006  # 0.06% round-trip
 DEFAULT_WORKERS = 4

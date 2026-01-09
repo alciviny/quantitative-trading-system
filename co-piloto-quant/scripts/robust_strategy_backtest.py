@@ -16,6 +16,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # --- IMPORTA SUA ESTRATÉGIA VENCEDORA ---
 from src.co_piloto_quant.strategies.mean_reversion import MeanReversionStrategy
+from src.co_piloto_quant.config import PROCESSED_DATA_PATH, RESULTS_PATH # Importa os caminhos
 
 # --------------------------
 # Configurações
