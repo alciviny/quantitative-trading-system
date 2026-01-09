@@ -1,21 +1,22 @@
 import sys
-import os
+from pathlib import Path
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
 import logging
 
 # Adiciona o diretório raiz ao path para garantir que os módulos sejam encontrados
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
 # --- NOVAS IMPORTAÇÕES ---
-from src.co_piloto_quant.data.data_manager import data_manager
-from src.co_piloto_quant.universe import get_b3_tickers
-from src.co_piloto_quant.data.indicator_engine import IndicatorEngine
-from src.co_piloto_quant.utils.math_tools import calculate_z_score
-from src.co_piloto_quant.indicators.names import IndicatorNames
+from co_piloto_quant.data.data_manager import data_manager
+from co_piloto_quant.universe import get_b3_tickers
+from co_piloto_quant.data.indicator_engine import IndicatorEngine
+from co_piloto_quant.utils.math_tools import calculate_z_score
+from co_piloto_quant.indicators.names import IndicatorNames
+from co_piloto_quant.config import RESULTS_DIR
 
 LOOKBACK_WINDOW = 252
 MIN_HISTORY = 300
@@ -123,8 +124,10 @@ def build_market_dna():
 
     df_dna = pd.DataFrame(results).dropna(subset=['Entropy_Z', 'Hurst_Z', 'VolVol_Z'])
     
-    os.makedirs('data/reports', exist_ok=True)
-    file_path = 'data/reports/b3_market_dna.csv'
+    # Cria o diretório de relatórios dentro de RESULTS_DIR e define o caminho do arquivo
+    report_dir = RESULTS_DIR / 'reports'
+    report_dir.mkdir(parents=True, exist_ok=True)
+    file_path = report_dir / 'b3_market_dna.csv'
     
     df_dna.sort_values(by='Entropy_Z', ascending=True, inplace=True)
     df_dna.to_csv(file_path, index=False)

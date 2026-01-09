@@ -11,11 +11,11 @@ from typing import Optional, Dict
 # =============================================================================
 # Ambiente & Logging
 # =============================================================================
-
+from pathlib import Path
 warnings.filterwarnings("ignore")
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.append(PROJECT_ROOT)
+# Adiciona o diretório raiz do projeto ao sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,9 +28,10 @@ logger = logging.getLogger("market_snapshot")
 # =============================================================================
 
 try:
-    from src.co_piloto_quant.data.data_fetching import fetch_data
-    from src.co_piloto_quant.analysis import calculate_indicators
-    from src.co_piloto_quant.universe import get_b3_tickers
+    from co_piloto_quant.data.data_fetching import fetch_data
+    from co_piloto_quant.analysis import calculate_indicators
+    from co_piloto_quant.universe import get_b3_tickers
+    from co_piloto_quant.config import RESULTS_DIR
 except ImportError as e:
     logger.error(f"Erro de importação: {e}")
     logger.error("Execute o script a partir da raiz do projeto.")
@@ -44,7 +45,7 @@ LOOKBACK_PERIOD = "2y"
 MIN_DATA_POINTS = 252
 MAX_FETCH_RETRIES = 2
 
-OUTPUT_DIR = "data/reports"
+OUTPUT_DIR = RESULTS_DIR / "reports"
 
 # =============================================================================
 # Core Logic

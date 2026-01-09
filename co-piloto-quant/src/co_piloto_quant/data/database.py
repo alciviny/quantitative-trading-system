@@ -2,14 +2,15 @@ import sqlite3
 import pandas as pd
 from pathlib import Path
 
-# Tenta importar a configuração, com fallback seguro
-try:
-    from co_piloto_quant.config import DATA_PATH
-except (ModuleNotFoundError, ImportError):
-    DATA_PATH = Path(__file__).resolve().parent.parent.parent.parent / "data"
+from co_piloto_quant.config import DATABASE_PATH
 
-DATA_PATH.mkdir(parents=True, exist_ok=True)
-DB_PATH = DATA_PATH / "market_data.db"
+# O diretório do banco de dados (RAW_DIR) já é criado pelo config.py
+# Garante que o arquivo do banco de dados exista para a conexão inicial.
+if not DATABASE_PATH.parent.exists():
+    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+DB_PATH = DATABASE_PATH
+
 
 def init_db():
     """Inicializa as tabelas e configura o modo WAL para concorrência."""

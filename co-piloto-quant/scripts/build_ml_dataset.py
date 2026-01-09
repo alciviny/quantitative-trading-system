@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 import os
 import json
 import pandas as pd
@@ -11,8 +12,8 @@ from datetime import datetime
 # -------------------------------------------------------
 # Configuração de Ambiente
 # -------------------------------------------------------
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.append(PROJECT_ROOT)
+# Adiciona o diretório raiz do projeto ao sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 warnings.filterwarnings('ignore')
 
@@ -25,19 +26,20 @@ logger = logging.getLogger("ML_Builder")
 # -------------------------------------------------------
 # Importações do Sistema
 # -------------------------------------------------------
-from src.co_piloto_quant.data.data_fetching import fetch_data
-from src.co_piloto_quant.universe import get_b3_tickers
+from co_piloto_quant.data.data_fetching import fetch_data
+from co_piloto_quant.universe import get_b3_tickers
+from co_piloto_quant.config import PROCESSED_DIR # <- Importa o caminho correto
 
 # --- CORREÇÃO: Usar process_data em vez de calculate_indicators ---
-from src.co_piloto_quant.data.data_processing import process_data
+from co_piloto_quant.data.data_processing import process_data
 
 # --- NOVAS IMPORTAÇÕES (Cérebro Quantitativo) ---
 # Certifique-se de que os arquivos abaixo existem conforme o Passo 1
-from src.co_piloto_quant.indicators.special.frac_diff import fractional_diff_fixed_window
-from src.co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
-from src.co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
+from co_piloto_quant.indicators.special.frac_diff import fractional_diff_fixed_window
+from co_piloto_quant.indicators.special.hurst_exponent import calculate_rolling_hurst
+from co_piloto_quant.indicators.special.market_entropy import calculate_rolling_entropy
 # Se tiver half_life:
-# from src.co_piloto_quant.indicators.special.half_life import calculate_rolling_ou_params
+# from co_piloto_quant.indicators.special.half_life import calculate_rolling_ou_params
 
 # -------------------------------------------------------
 # Configurações de ML
@@ -46,7 +48,9 @@ LOOKBACK_YEARS = "4y"
 TARGET_HORIZON = 5
 MIN_HISTORY = 300
 
-OUTPUT_DIR = "data/ml_ready"
+OUTPUT_DIR = PROCESSED_DIR # <- Usa o caminho do config
+# Cria o diretório se não existir, usando pathlib
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # -------------------------------------------------------
 # Target Engineering
@@ -163,7 +167,7 @@ def build_ml_dataset():
     print(f"🎯 Horizonte: {TARGET_HORIZON} dias\n")
 
     tickers = get_b3_tickers()
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # A criação do diretório já foi movida para o topo do script.
 
     success_count = 0
     total_rows = 0
@@ -174,7 +178,7 @@ def build_ml_dataset():
 
             if df_asset is not None and not df_asset.empty:
                 safe_ticker = ticker.replace('.', '_')
-                file_path = f"{OUTPUT_DIR}/{safe_ticker}.parquet"
+                file_path = OUTPUT_DIR / f"{safe_ticker}.parquet" # <- Uso de pathlib
                 df_asset.to_parquet(file_path, index=False)
 
                 total_rows += len(df_asset)
@@ -190,8 +194,9 @@ def build_ml_dataset():
         "assets_processed": success_count,
         "total_rows": total_rows
     }
-
-    with open(f"{OUTPUT_DIR}/_metadata.json", "w") as f:
+    
+    metadata_path = OUTPUT_DIR / "_metadata.json" # <- Uso de pathlib
+    with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=4)
 
     print("\n" + "=" * 60)

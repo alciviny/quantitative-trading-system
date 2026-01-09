@@ -1,5 +1,6 @@
-import sys
 import os
+import sys
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import joblib
@@ -7,16 +8,22 @@ import logging
 import matplotlib.pyplot as plt
 from sklearn.utils import resample
 
+# Adiciona o diretório raiz do projeto ao sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from co_piloto_quant.config import PROCESSED_DIR, MODELS_PATH, RESULTS_DIR
+
 # =========================
 # Configuração
 # =========================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger("Economics")
 
-DATA_DIR = 'data/ml_ready'
-MODEL_DIR = 'models'
-OUT_DIR = 'reports'
-os.makedirs(OUT_DIR, exist_ok=True)
+DATA_DIR = PROCESSED_DIR
+MODEL_DIR = MODELS_PATH
+OUT_DIR = RESULTS_DIR
+# O diretório de resultados já é criado pelo config.py, então a linha abaixo foi removida.
+# OUT_DIR.mkdir(exist_ok=True)
 
 # Execução: custos (ajuste para seu mercado)
 COMMISSION_PER_TRADE = 0.001   # 0.1% por trade (both sides counted separately below)
@@ -26,10 +33,21 @@ MIN_TRADES_TO_CONSIDER = 10
 RANDOM_STATE = 42
 
 def load_data_and_model():
+    """
+    Carrega todos os arquivos Parquet do diretório de dados processados e os concatena.
+    Também carrega o modelo de ML e a lista de features.
+    """
     # 1. Carregar Dados
     try:
-        df = pd.read_parquet(DATA_DIR)
+        parquet_files = list(DATA_DIR.glob('*_SA.parquet'))
+        if not parquet_files:
+            logger.error(f"Nenhum arquivo parquet encontrado em {DATA_DIR}")
+            return None, None, None
+            
+        df_list = [pd.read_parquet(f) for f in parquet_files]
+        df = pd.concat(df_list, ignore_index=True)
         df = df.dropna().sort_values(by='data_pregao')
+        logger.info(f"{len(parquet_files)} arquivos parquet carregados e concatenados.")
     except Exception as e:
         logger.error(f"Erro ao carregar dados: {e}")
         return None, None, None
@@ -39,8 +57,8 @@ def load_data_and_model():
     possible_models = ['market_brain_gb.joblib', 'market_brain_rf.joblib', 'market_brain.joblib']
     model_path = None
     for fname in possible_models:
-        p = os.path.join(MODEL_DIR, fname)
-        if os.path.exists(p):
+        p = MODEL_DIR / fname
+        if p.exists():
             model_path = p
             break
 
@@ -50,7 +68,7 @@ def load_data_and_model():
 
     try:
         model = joblib.load(model_path)
-        features = joblib.load(os.path.join(MODEL_DIR, 'features_list.joblib'))
+        features = joblib.load(MODEL_DIR / 'features_list.joblib')
         logger.info(f"Modelo carregado: {model_path}")
     except Exception as e:
         logger.error(f"Erro ao carregar modelo/features: {e}")
@@ -152,7 +170,7 @@ def analyze_economics():
         stats_for_plot.append((threshold, n_trades, net_mean_return))
 
     report = pd.DataFrame(rows).set_index('threshold')
-    report.to_csv(os.path.join(OUT_DIR, 'economics_threshold_scan.csv'))
+    report.to_csv(OUT_DIR / 'economics_threshold_scan.csv')
     print("\n" + "="*110)
     print("💰 ANÁLISE ECONÔMICA DO SISTEMA (PAYOFF & EXPECTATIVA) — RESULTADO AGREGADO")
     print("="*110)
@@ -192,7 +210,7 @@ def analyze_economics():
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(OUT_DIR, 'expectancy_vs_threshold.png'), dpi=150)
+    plt.savefig(OUT_DIR / 'expectancy_vs_threshold.png', dpi=150)
     plt.close()
 
     # 2) Cumulative PnL usando melhor threshold by total_pnl
@@ -210,7 +228,7 @@ def analyze_economics():
         plt.ylabel('Cumulative Return')
         plt.grid(True)
         plt.tight_layout()
-        plt.savefig(os.path.join(OUT_DIR, 'cumulative_pnl_best_threshold.png'), dpi=150)
+        plt.savefig(OUT_DIR / 'cumulative_pnl_best_threshold.png', dpi=150)
         plt.close()
 
         # imprime resumo estatístico do melhor conjunto

@@ -1,11 +1,11 @@
 import sys
-import os
+from pathlib import Path
 import pandas as pd
 import MetaTrader5 as mt5
 
-# Ajuste de path para importar seus módulos
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.co_piloto_quant.analysis import calculate_indicators
+# Adiciona o diretório raiz do projeto ao sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from co_piloto_quant.analysis import calculate_indicators
 
 def check_asset_dna(ticker):
     """Analisa o DNA do ativo e mostra seus níveis relativos."""
