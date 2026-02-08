@@ -487,5 +487,13 @@ co-piloto-quant/
 
 ---
 
+## 🤖 Ajuda de Agentes IA
+
+Para entender o que agentes de IA podem fazer para ajudar no desenvolvimento, manutenção e expansão deste sistema, consulte:
+
+📖 **[CAPACIDADES_AGENTE_IA.md](CAPACIDADES_AGENTE_IA.md)** - Guia completo sobre capacidades de agentes de IA neste projeto
+
+---
+
 **Última atualização**: 8 de fevereiro de 2026  
 **Versão do Projeto**: 0.1.0
