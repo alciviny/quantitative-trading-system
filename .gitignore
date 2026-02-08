@@ -1,0 +1,79 @@
+# Ambientes Virtuais Python
+vbt_env/
+env/
+venv/
+ENV/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Node modules
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Data files (se não quiser versionar)
+*.csv
+*.parquet
+data/processed/
+data/results/
+
+# Coverage reports
+.coverage
+htmlcov/
+coverage/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Models (se forem muito grandes)
+# models/*.joblib
+# models/*.pkl
