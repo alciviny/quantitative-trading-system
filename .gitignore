@@ -79,3 +79,60 @@ coverage/
 # Models (se forem muito grandes)
 # models/*.joblib
 # models/*.pkl
+
+# ========================================
+# DOCUMENTAÇÃO TEMPORÁRIA/GUIAS (manter apenas essencial)
+# ========================================
+*_GUIDE.md
+*_RESUMO*.md
+*_COMPLETA.md
+*_COMPLETO.md
+*INSTALACAO.md
+*PREVIEW.md
+API_JA_RODANDO.md
+COMO_ADICIONAR_NOVAS_ACOES.md
+COMO_USAR_TUDO_JUNTO.md
+COMO_VER_NO_FRONTEND.md
+RELATORIO_*.md
+VERIFICACAO_*.md
+VISUAL_*.md
+START_ALL_GUIDE.md
+FEATURE_STORE_GUIDE.md
+FRONTEND_REACT.md
+FRONTEND_INSTALACAO.md
+FRONTEND_FEATURE_STORE.md
+
+# Manter apenas:
+# - README.md (raiz)
+# - ARQUITETURA_*.md
+# - co-piloto-frontend/README.md
+# - co-piloto-quant/README.md
+# - docs/*.md
+
+# ========================================
+# SCRIPTS DE GERENCIAMENTO (usar npm/python diretamente)
+# ========================================
+api_manager.bat
+api_manager.sh
+start-all.bat
+start-all.sh
+update_features.bat
+update_features.sh
+setup-clean.bat
+setup.bat
+setup.sh
+start.bat
+
+# ========================================
+# ARQUIVOS TEMPORÁRIOS
+# ========================================
+*.txt
+!requirements.txt
+!pyproject.toml
+
+# ========================================
+# CÓDIGO LEGADO/REMOVIDO
+# ========================================
+feature_factory.py
+cleanup_legacy.py
+check_scripts.py
