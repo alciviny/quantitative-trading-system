@@ -65,6 +65,8 @@ logs/
 *.parquet
 data/processed/
 data/results/
+data/features/
+data/raw/*.db
 
 # Coverage reports
 .coverage

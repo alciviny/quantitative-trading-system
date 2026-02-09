@@ -97,18 +97,24 @@ def save_price_data(df: pd.DataFrame, ticker: str):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    # 2.1 CORREÇÃO DE SEGURANÇA: Remove tuplas residuais nas colunas
-    # Se o pandas.concat criou colunas como ('close', 'PETR4'), transformamos em 'close'
+    # 2.1 Remove colunas que são tuplas convertidas em strings
+    # Exemplo: "('close', 'petr4.sa')" vira só 'close'
     new_cols = []
     for c in df.columns:
         if isinstance(c, tuple):
-            new_cols.append(str(c[0])) # Pega o primeiro elemento da tupla
+            new_cols.append(str(c[0]))  # Pega o primeiro elemento da tupla
+        elif isinstance(c, str) and c.startswith("('") and c.endswith("')"):
+            # String que parece uma tupla serializada
+            new_cols.append(c.split("'")[1])  # Extrai o primeiro elemento
         else:
             new_cols.append(str(c))
     df.columns = new_cols
+    
+    # 2.2 Converte todas as colunas para lowercase
+    df.columns = [c.lower() for c in df.columns]
 
-    # 3. Remove colunas duplicadas
-    df = df.loc[:, ~df.columns.duplicated()]
+    # 3. Remove colunas duplicadas (mantém a última, que geralmente tem os dados corretos)
+    df = df.loc[:, ~df.columns.duplicated(keep='last')]
 
     # 4. Padroniza colunas (Case insensitive)
     # Cria um mapa reverso para encontrar 'Open', 'open', 'OPEN', etc.

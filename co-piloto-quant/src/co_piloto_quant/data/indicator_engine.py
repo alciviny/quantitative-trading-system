@@ -3,8 +3,9 @@ import numpy as np
 import logging
 from typing import Dict, Callable, Any
 
-# Imports dos indicadores
-import pandas_ta as ta
+# Imports dos indicadores - usando biblioteca 'ta' para análise técnica
+import ta as ta_lib
+
 from co_piloto_quant.indicators.special.ehlers_hilbert import ehlers_sinewave
 from co_piloto_quant.indicators.bollinger_bands import bollinger_bands
 from co_piloto_quant.indicators.ifr_tpm import calculate_ifr_tpm

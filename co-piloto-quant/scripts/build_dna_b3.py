@@ -23,53 +23,64 @@ MIN_HISTORY = 300
 
 def analyze_asset_dna(ticker, df):
     """
-    Calcula o 'DNA' de um ativo a partir de seu DataFrame, agora recebido como parâmetro.
-    Salva o DataFrame enriquecido de volta no banco de dados.
+    Analisa o DNA de um ativo LENDO features pré-computadas do Parquet Feature Store.
+    🚀 OTIMIZADO: Não recalcula indicadores - apenas lê do cache.
     """
     try:
         # 1. Validação dos dados de entrada
         if df.empty or len(df) < MIN_HISTORY:
             return None
 
-        # Limpeza básica (mantida por segurança, mas DataManager deve padronizar)
-        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-        df.columns = [col.lower() for col in df.columns]
-        if 'adj close' in df.columns: df.rename(columns={'adj close': 'close'}, inplace=True)
-
-        # 2. Cálculo de indicadores com IndicatorEngine
-        engine = IndicatorEngine(df)
-        engine.add_indicator('entropy', window=20)
-        engine.add_indicator('hurst', window=72, kind='returns')
-        engine.add_indicator('half_life', window=60)
+        # Normaliza colunas
+        df.columns = [str(col).lower() for col in df.columns]
         
-        df_calc = engine.get_data()
-
-        # 3. Cálculo de métricas específicas
-        df_calc['vol_20'] = df_calc['close'].pct_change().rolling(20).std()
-        vol_of_vol = df_calc['vol_20'].rolling(20).std()
+        # 2. Lê indicadores PRÉ-COMPUTADOS do Parquet Feature Store
+        entropy_col = IndicatorNames.entropy(20).lower()
+        hurst_col = IndicatorNames.hurst(72, 'returns').lower()
+        half_life_col = IndicatorNames.half_life(60).lower()
         
-        entropy_col = IndicatorNames.entropy(20)
-        hurst_col = IndicatorNames.hurst(72, 'returns')
-        
-        if entropy_col not in df_calc.columns: return None
+        # Verifica se indicadores existem no Parquet
+        if entropy_col not in df.columns:
+            logger.warning(f"{ticker}: Feature Store incompleto! Execute: python scripts/update_all_data.py")
+            return None
 
-        # Calcula Z-Scores
-        entropy_z = calculate_z_score(df_calc[entropy_col], window=LOOKBACK_WINDOW).iloc[-1]
-        hurst_z = calculate_z_score(df_calc[hurst_col], window=LOOKBACK_WINDOW).iloc[-1] if hurst_col in df_calc.columns else np.nan
-        volvol_z = calculate_z_score(vol_of_vol, window=LOOKBACK_WINDOW).iloc[-1]
+        # 3. Calcula apenas volatilidade (métrica auxiliar não salva no Feature Store)
+        df['vol_20'] = df['close'].pct_change().rolling(20).std()
+        vol_of_vol = df['vol_20'].rolling(20).std()
         
-        hl_col = 'half_life_60' # Nome da coluna gerada pelo indicador
-        current_hl = df_calc[hl_col].iloc[-1] if hl_col in df_calc.columns else 999
+        # 4. Calcula Z-Scores dos indicadores pré-computados
+        try:
+            entropy_z = calculate_z_score(df[entropy_col], window=LOOKBACK_WINDOW).iloc[-1]
+        except Exception as e:
+            logger.warning(f"{ticker}: Erro ao calcular Entropy Z-Score: {e}")
+            entropy_z = np.nan
+            
+        try:
+            hurst_z = calculate_z_score(df[hurst_col], window=LOOKBACK_WINDOW).iloc[-1] if hurst_col in df.columns else np.nan
+        except:
+            hurst_z = np.nan
+            
+        try:
+            volvol_z = calculate_z_score(vol_of_vol, window=LOOKBACK_WINDOW).iloc[-1]
+        except:
+            volvol_z = np.nan
+        
+        current_hl = df[half_life_col].iloc[-1] if half_life_col in df.columns else 999
 
-        # --- PONTO CRÍTICO DA REFATORAÇÃO ---
-        # 4. Persiste o DataFrame enriquecido com todos os novos indicadores
-        data_manager.save_data(ticker, df_calc)
-        # logging.debug(f"DNA e indicadores para {ticker} salvos no banco de dados.")
+        # Validação
+        if pd.isna(entropy_z):
+            logger.warning(f"Entropy Z-Score inválido para {ticker}")
+            return None
+        
+        if pd.isna(volvol_z):
+            volvol_z = 0.0
+        
+        logger.info(f"✓ {ticker}: Entropy_Z={entropy_z:.2f}, Hurst_Z={hurst_z:.2f}, VolVol_Z={volvol_z:.2f}")
 
         # 5. Monta o resumo do DNA para o relatório
         dna = {
             'Ticker': ticker,
-            'Preco': df_calc['close'].iloc[-1],
+            'Preco': df['close'].iloc[-1],
             'Entropy_Z': entropy_z,
             'Hurst_Z': hurst_z,
             'VolVol_Z': volvol_z,
@@ -93,36 +104,54 @@ def analyze_asset_dna(ticker, df):
 
 def build_market_dna():
     """
-    Orquestra a construção do DNA de mercado. Agora busca os dados em lote primeiro
-    e depois processa os ativos, de forma muito mais eficiente.
+    Orquestra a construção do DNA de mercado lendo do Feature Store (Parquet).
+    MUITO MAIS RÁPIDO: não precisa calcular indicadores, só lê features pré-computadas.
     """
-    print("\n🧬 --- INICIANDO MAPEAMENTO DE DNA DA B3 (Infra Otimizada) ---")
+    print("\n[DNA] --- INICIANDO MAPEAMENTO DE DNA DA B3 (Feature Store) ---")
     
-    tickers = get_b3_tickers()
-    print(f"Buscando dados para {len(tickers)} ativos...")
-
-    # --- PONTO CRÍTICO DA REFATORAÇÃO ---
-    # 1. Busca todos os dados em lote usando o DataManager.
-    #    Isso acelera o processo e utiliza o cache de forma inteligente.
-    all_data = data_manager.get_data_batch(tickers)
+    # Path do Feature Store
+    features_path = Path(__file__).parent.parent / "data" / "features"
     
-    valid_data = {t: df for t, df in all_data.items() if df is not None and not df.empty}
-    print(f"Dados válidos obtidos para {len(valid_data)} ativos. Iniciando análise...")
+    if not features_path.exists():
+        print("[ERRO] Feature Store não encontrado!")
+        print(f"Execute: python scripts/update_all_data.py")
+        return
+    
+    # Lista arquivos Parquet disponíveis
+    parquet_files = list(features_path.glob("*_enriched.parquet"))
+    
+    if not parquet_files:
+        print("[ERRO] Nenhum arquivo de features encontrado!")
+        print(f"Execute: python scripts/update_all_data.py")
+        return
+    
+    print(f"[INFO] {len(parquet_files)} ativos com features pré-computadas")
 
     results = []
     
-    # 2. Processa os dados já em memória (muito mais rápido)
-    for ticker, df in tqdm(valid_data.items(), desc="Analisando DNA dos Ativos"):
-        dna = analyze_asset_dna(ticker, df)
-        if dna:
-            results.append(dna)
+    # 2. Processa os arquivos Parquet (MUITO MAIS RÁPIDO que calcular)
+    for parquet_file in tqdm(parquet_files, desc="Analisando DNA dos Ativos"):
+        # Extrai ticker do nome do arquivo
+        ticker = parquet_file.stem.replace('_enriched', '').replace('_SA', '.SA')
+        
+        try:
+            # Lê DataFrame enriquecido do Parquet
+            df = pd.read_parquet(parquet_file)
+            dna = analyze_asset_dna(ticker, df)
+            if dna:
+                results.append(dna)
+        except Exception as e:
+            logger.warning(f"Erro ao processar {ticker}: {e}")
+            continue
             
     # 3. Consolida e salva o relatório
     if not results:
-        print("❌ Nenhum DNA de ativo pôde ser gerado.")
+        print("[ERRO] Nenhum DNA de ativo pôde ser gerado.")
         return
 
-    df_dna = pd.DataFrame(results).dropna(subset=['Entropy_Z', 'Hurst_Z', 'VolVol_Z'])
+    # Remove apenas ativos sem Entropy_Z (requisito mínimo)
+    # Hurst_Z e VolVol_Z podem ser NaN para ativos com histórico curto
+    df_dna = pd.DataFrame(results).dropna(subset=['Entropy_Z'])
     
     # Cria o diretório de relatórios dentro de RESULTS_DIR e define o caminho do arquivo
     report_dir = RESULTS_DIR / 'reports'
@@ -137,19 +166,19 @@ def build_market_dna():
     pd.set_option('display.float_format', '{:.2f}'.format)
     
     print("\n" + "="*80)
-    print(f"✅ RELATÓRIO DE DNA GERADO COM {len(df_dna)} ATIVOS")
+    print(f"[OK] RELATÓRIO DE DNA GERADO COM {len(df_dna)} ATIVOS")
     print("="*80)
     
-    print("\n🏆 TOP 10 MAIS ESTÁVEIS HOJE (Z-Score Entropia Baixo)")
+    print("\n[TOP] TOP 10 MAIS ESTÁVEIS HOJE (Z-Score Entropia Baixo)")
     print(" (Oportunidades de Tendência Limpa)")
     print(df_dna[['Ticker', 'Preco', 'Entropy_Z', 'Estado']].head(10).to_string(index=False))
     
-    print("\n💀 TOP 10 MAIS TÓXICOS HOJE (Z-Score Entropia Alto)")
+    print("\n[ALERTA] TOP 10 MAIS TÓXICOS HOJE (Z-Score Entropia Alto)")
     print(" (Cuidado: Risco de Reversão/Violência)")
     print(df_dna[['Ticker', 'Preco', 'Entropy_Z', 'Estado']].tail(10).sort_values(by='Entropy_Z', ascending=False).to_string(index=False))
     
-    print(f"\n📁 Arquivo de relatório salvo em: {file_path}")
-    print("💡 Os DataFrames enriquecidos com todos os indicadores foram salvos no banco de dados para uso futuro.")
+    print(f"\n[ARQUIVO] Relatório salvo em: {file_path}")
+    print("[INFO] Os DataFrames enriquecidos com todos os indicadores foram salvos no banco de dados para uso futuro.")
 
 if __name__ == "__main__":
     build_market_dna()
