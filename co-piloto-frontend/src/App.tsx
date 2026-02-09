@@ -1,7 +1,8 @@
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
 import { DashboardPage } from './pages/DashboardPage'
 import { ScannerPage } from './pages/ScannerPage'
-import { LayoutDashboard, Search, TrendingUp, Activity, Settings } from 'lucide-react'
+import { IndicatorsPage } from './pages/IndicatorsPage'
+import { LayoutDashboard, Search, TrendingUp, Activity, Settings, LineChart } from 'lucide-react'
 import { cn } from './lib/utils'
 
 function App() {
@@ -10,6 +11,7 @@ function App() {
   const navigation = [
     { name: 'Dashboard', href: '/', icon: LayoutDashboard },
     { name: 'Scanner', href: '/scanner', icon: Search },
+    { name: 'Indicadores', href: '/indicators', icon: LineChart },
     { name: 'Backtest', href: '/backtest', icon: TrendingUp },
     { name: 'Saúde do Sistema', href: '/health', icon: Activity },
   ]
@@ -105,6 +107,7 @@ function App() {
         <div className="p-8">
           <Routes>
             <Route path="/" element={<DashboardPage />} />
+            <Route path="/indicators" element={<IndicatorsPage />} />
             <Route path="/scanner" element={<ScannerPage />} />
             <Route
               path="/backtest"

@@ -32,10 +32,14 @@ app.add_middleware(
 # ========== CAMINHOS DOS DADOS ==========
 BASE_PATH = Path(__file__).parent / "co-piloto-quant"
 PARQUET_PATH = BASE_PATH / "data" / "processed"
+FEATURES_PATH = BASE_PATH / "data" / "features"  # Feature Store
 RESULTS_PATH = BASE_PATH / "data" / "results"
 
 # Cache simples em memória
 _cache = {}
+
+# Flag para indicar se Feature Store está disponível
+FEATURE_STORE_ENABLED = FEATURES_PATH.exists()
 
 
 def get_available_tickers() -> List[str]:
@@ -43,12 +47,57 @@ def get_available_tickers() -> List[str]:
     if "tickers" in _cache:
         return _cache["tickers"]
     
-    parquet_files = list(PARQUET_PATH.glob("*_SA.parquet"))
-    tickers = [f.stem for f in parquet_files]  # Remove .parquet
-    _cache["tickers"] = sorted(tickers)
+    # Prioriza features se disponível, senão usa processed
+    if FEATURE_STORE_ENABLED:
+        feature_files = list(FEATURES_PATH.glob("*_enriched.parquet"))
+        if feature_files:
+            tickers = [f.stem.replace("_enriched", "") for f in feature_files]
+            _cache["tickers"] = sorted(tickers)
+            logger.info(f"✅ {len(tickers)} ações encontradas em Feature Store")
+            return tickers
     
+    # Fallback para processed
+    parquet_files = list(PARQUET_PATH.glob("*_SA.parquet"))
+    tickers = [f.stem for f in parquet_files]
+    _cache["tickers"] = sorted(tickers)
     logger.info(f"✅ {len(tickers)} ações encontradas em {PARQUET_PATH}")
     return tickers
+
+
+def load_stock_data(ticker: str, use_features: bool = True) -> Optional[pd.DataFrame]:
+    """Carrega dados de um ticker com fallback automático
+    
+    Args:
+        ticker: Código do ticker (ex: PETR4_SA)
+        use_features: Se True, tenta carregar de features/ primeiro
+    
+    Returns:
+        DataFrame com os dados ou None se não encontrar
+    """
+    # 1. Tenta carregar do Feature Store (dados enriquecidos)
+    if use_features and FEATURE_STORE_ENABLED:
+        feature_file = FEATURES_PATH / f"{ticker}_enriched.parquet"
+        if feature_file.exists():
+            try:
+                df = pd.read_parquet(feature_file)
+                logger.debug(f"✅ {ticker}: Carregado do Feature Store ({len(df)} linhas, {len(df.columns)} features)")
+                return df
+            except Exception as e:
+                logger.warning(f"⚠️  {ticker}: Erro ao ler Feature Store, usando fallback - {e}")
+    
+    # 2. Fallback: Carrega dados processados (sem features avançadas)
+    processed_file = PARQUET_PATH / f"{ticker}.parquet"
+    if processed_file.exists():
+        try:
+            df = pd.read_parquet(processed_file)
+            logger.debug(f"✅ {ticker}: Carregado de processed/ ({len(df)} linhas)")
+            return df
+        except Exception as e:
+            logger.error(f"❌ {ticker}: Erro ao ler arquivo - {e}")
+            return None
+    
+    logger.warning(f"❌ {ticker}: Arquivo não encontrado")
+    return None
 
 
 # ========== ENDPOINTS ==========
@@ -56,12 +105,22 @@ def get_available_tickers() -> List[str]:
 @app.get("/api/health")
 async def health_check():
     """Verificação de saúde da API"""
+    
+    # Verifica quantos features enriched existem
+    feature_count = len(list(FEATURES_PATH.glob("*_enriched.parquet"))) if FEATURES_PATH.exists() else 0
+    
     return {
         "status": "ok",
         "service": "Co-Piloto Quant API",
-        "version": "2.0",
+        "version": "3.0",
+        "feature_store": {
+            "enabled": FEATURE_STORE_ENABLED,
+            "path": str(FEATURES_PATH),
+            "enriched_files": feature_count
+        },
         "data_sources": {
-            "parquet": str(PARQUET_PATH),
+            "features": str(FEATURES_PATH),
+            "processed": str(PARQUET_PATH),
             "results": str(RESULTS_PATH)
         }
     }
@@ -81,16 +140,14 @@ async def get_stocks() -> List[str]:
 @app.get("/api/stocks/{stock}/price-history")
 async def get_price_history(stock: str, days: int = 365):
     """
-    Retorna histórico de preços do arquivo Parquet
+    Retorna histórico de preços (usa Feature Store se disponível)
     """
     try:
-        parquet_file = PARQUET_PATH / f"{stock}.parquet"
+        # Usa função helper com fallback automático
+        df = load_stock_data(stock, use_features=True)
         
-        if not parquet_file.exists():
+        if df is None:
             raise HTTPException(status_code=404, detail=f"Ação {stock} não encontrada")
-        
-        # Lê o parquet
-        df = pd.read_parquet(parquet_file)
         
         # Pega últimos N dias
         df = df.tail(days)
@@ -192,17 +249,15 @@ async def get_forward_returns(stock: str, horizon: str = "5d"):
 @app.get("/api/stocks/{stock}/indicators")
 async def get_technical_indicators(stock: str, days: int = 90):
     """
-    Retorna indicadores técnicos do arquivo Parquet
-    Inclui: Hurst, Entropy, Half-Life, Fractal Dimension, etc.
+    Retorna indicadores técnicos (Feature Store com todos os indicadores avançados)
+    Inclui: Hurst, Entropy, Half-Life, Fractal Dimension, Lempel-Ziv, etc.
     """
     try:
-        parquet_file = PARQUET_PATH / f"{stock}.parquet"
+        # Prioriza Feature Store para ter indicadores completos
+        df = load_stock_data(stock, use_features=True)
         
-        if not parquet_file.exists():
+        if df is None:
             raise HTTPException(status_code=404, detail=f"Ação {stock} não encontrada")
-        
-        # Lê o parquet
-        df = pd.read_parquet(parquet_file)
         
         # Pega últimos N dias
         df = df.tail(days)
@@ -211,24 +266,29 @@ async def get_technical_indicators(stock: str, days: int = 90):
         indicator_columns = []
         all_columns = df.columns.tolist()
         
-        # Indicadores comuns de física de mercado
-        physics_indicators = [
-            'hurst', 'Hurst', 'hurst_exponent',
-            'entropy', 'Entropy', 'Entropy_20',
-            'half_life', 'HalfLife', 'ou_half_life',
-            'fractal', 'fractal_dimension',
-            'lempel_ziv', 'LZ_complexity',
-            'volatility', 'Volatility', 'vol_vol',
-            'rsi', 'RSI', 'IFR',
-            'bollinger', 'BB_Upper', 'BB_Lower',
-            'ema_50', 'ema_200', 'EMA',
-            'regime', 'Regime', 'regime_score'
+        # Indicadores do Feature Store (complexos)
+        advanced_indicators = [
+            'hurst_exponent', 'market_entropy', 'fractal_dimension',
+            'lempel_ziv', 'half_life', 'mean_reversion_speed', 'frac_diff',
+            'regime_trend', 'regime_volatility', 'regime_efficiency'
         ]
         
-        # Filtra colunas que existem
+        # Indicadores básicos
+        basic_indicators = [
+            'returns', 'log_returns', 'volatility', 'atr', 'roc',
+            'sma', 'ema', 'rsi', 'bollinger', 'volume_ratio'
+        ]
+        
+        # Combina todos os padrões
+        all_indicator_patterns = advanced_indicators + basic_indicators
+        
+        # Filtra colunas que existem (ignora OHLCV básico)
+        basic_cols = {'open', 'high', 'low', 'close', 'volume', 'date', 'timestamp'}
         for col in all_columns:
+            if col.lower() in basic_cols:
+                continue
             col_lower = col.lower()
-            if any(ind.lower() in col_lower for ind in physics_indicators):
+            if any(ind.lower() in col_lower for ind in all_indicator_patterns):
                 indicator_columns.append(col)
         
         if not indicator_columns:
@@ -249,7 +309,11 @@ async def get_technical_indicators(stock: str, days: int = 90):
             for col in indicator_columns:
                 value = row.get(col)
                 if pd.notna(value):
-                    record[col] = float(value)
+                    # Se é numérico, converte para float; senão mantém como string
+                    try:
+                        record[col] = float(value)
+                    except (ValueError, TypeError):
+                        record[col] = str(value)
             
             data.append(record)
         
@@ -359,12 +423,11 @@ async def get_assets():
 async def get_asset_ohlcv(asset_id: str, days: int = 365):
     """Retorna dados OHLCV (Open, High, Low, Close, Volume) do ativo"""
     try:
-        parquet_file = PARQUET_PATH / f"{asset_id}.parquet"
+        # Carrega dados (features ou processed)
+        df = load_stock_data(asset_id, use_features=True)
         
-        if not parquet_file.exists():
+        if df is None:
             raise HTTPException(status_code=404, detail=f"Ativo {asset_id} não encontrado")
-        
-        df = pd.read_parquet(parquet_file)
         df = df.tail(days)
         
         # Coluna de data (se existir)
