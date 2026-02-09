@@ -183,6 +183,13 @@ class DataManager:
         if df.empty:
             return df
 
+        # Normaliza colunas (remove MultiIndex se houver)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        
+        # Converte colunas para lowercase
+        df.columns = [str(col).lower() for col in df.columns]
+
         cols = ['open', 'high', 'low', 'close', 'volume']
         # Garante que as colunas existam, preenchendo com NaN se necessário
         for col in cols:

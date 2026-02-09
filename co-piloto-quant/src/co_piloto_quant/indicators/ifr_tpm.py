@@ -1,5 +1,4 @@
 import pandas as pd
-import pandas_ta as ta
 
 from co_piloto_quant.indicators.names import IndicatorNames
 
@@ -18,14 +17,16 @@ def calculate_ifr_tpm(data: pd.DataFrame, column: str = 'close', period: int = 1
         series_input = series_input.iloc[:, 0]
 
     # --- CORREÇÃO DE ROBUSTEZ 2: Remoção de Duplicatas no Índice ---
-    # Evita erros em bibliotecas como pandas_ta com dados de índice duplicado
+    # Evita erros em bibliotecas como ta com dados de índice duplicado
     series_input = series_input[~series_input.index.duplicated(keep='first')]
 
-    # Calcula o RSI usando a série sanitizada
-    ifr_series = ta.rsi(close=series_input, length=period)
+    # Calcula o RSI usando a série sanitizada com a biblioteca 'ta'
+    from ta.momentum import RSIIndicator
+    rsi_indicator = RSIIndicator(close=series_input, window=period)
+    ifr_series = rsi_indicator.rsi()
 
     # --- CORREÇÃO DE ROBUSTEZ ADICIONAL: Lidar com output Nulo ---
-    # Se pandas_ta não puder calcular (e.g., dados insuficientes), ele pode retornar None.
+    # Se ta não puder calcular (e.g., dados insuficientes), pode retornar None.
     # Usa IndicatorNames para nomear a coluna.
     column_name = IndicatorNames.rsi(period)
     if ifr_series is None:
