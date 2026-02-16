@@ -57,6 +57,21 @@ class DataManager:
         """
         df = self._cached_get_data(ticker, force_update)
         return df.copy()  # proteção contra mutação externa
+    def _fetch_external(
+        self, ticker: str, df_local: pd.DataFrame, force_update: bool = False
+    ) -> pd.DataFrame:
+        if force_update:
+            return fetch_data(ticker, period="max")
+        if df_local is not None and not df_local.empty:
+            df_local = self._normalize_index(df_local)
+            start_date = df_local.index.max().strftime('%Y-%m-%d')
+            end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+            return fetch_data(ticker, start=start_date, end=end_date)
+        else:
+            # Se não há dados locais, buscar um período padrão
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=365*2)).strftime('%Y-%m-%d')
+            return fetch_data(ticker, start=start_date, end=end_date)
 
     def get_data_batch(
         self, tickers: list[str], force_update: bool = False
@@ -97,7 +112,7 @@ class DataManager:
             df_local = load_price_data(ticker)
 
             if self._needs_update(df_local, force_update):
-                df_external = self._fetch_external(ticker, df_local)
+                df_external = self._fetch_external(ticker, df_local, force_update)
 
                 if df_external is not None and not df_external.empty:
                     df_merged = self._merge_data(df_local, df_external)
@@ -157,18 +172,20 @@ class DataManager:
         return datetime.now() - last_date > self.max_age
 
     def _fetch_external(
-        self, ticker: str, df_local: pd.DataFrame
+        self, ticker: str, df_local: pd.DataFrame, force_update: bool = False
     ) -> pd.DataFrame:
+        if force_update:
+            return fetch_data(ticker, period="max")
         if df_local is not None and not df_local.empty:
             df_local = self._normalize_index(df_local)
             start_date = df_local.index.max().strftime('%Y-%m-%d')
             end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+            return fetch_data(ticker, start=start_date, end=end_date)
         else:
             # Se não há dados locais, buscar um período padrão
             end_date = datetime.now().strftime('%Y-%m-%d')
             start_date = (datetime.now() - timedelta(days=365*2)).strftime('%Y-%m-%d')
-
-        return fetch_data(ticker, start=start_date, end=end_date)
+            return fetch_data(ticker, start=start_date, end=end_date)
 
     # ===============================================================
     # UTILITÁRIOS
@@ -214,7 +231,17 @@ class DataManager:
         df_old = DataManager._normalize_index(df_old)
         df_new = DataManager._normalize_index(df_new)
 
-        df = pd.concat([df_old, df_new])
+        # Remove datas de df_old que já existem em df_new
+        idx_new = set(df_new.index)
+        df_old_valid = df_old[~df_old.index.isin(idx_new)].copy()
+
+        # Remove linhas de df_old com OHLCV todos zero ou NaN
+        ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
+        if all(col in df_old_valid.columns for col in ohlcv_cols):
+            mask_valid = (~df_old_valid[ohlcv_cols].isna()).all(axis=1) & (df_old_valid[ohlcv_cols] != 0).all(axis=1)
+            df_old_valid = df_old_valid[mask_valid]
+
+        df = pd.concat([df_old_valid, df_new])
         df = df[~df.index.duplicated(keep="last")]
         return df.sort_index()
 

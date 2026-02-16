@@ -44,8 +44,8 @@ def fetch_data(
         Um DataFrame do pandas com os dados OHLCV ou um DataFrame vazio em caso de falha.
     """
     try:
+
         logger.debug(f"Iniciando download para {ticker}...")
-        
         # yfinance lida com a priorização de start/end sobre period
         with suppress_stdout_stderr():
             data = yf.download(
@@ -57,6 +57,25 @@ def fetch_data(
                 progress=False,
                 auto_adjust=True,  # Geralmente recomendado para obter preços ajustados
             )
+
+        # Normalização: se MultiIndex, pega apenas o nível 0 (colunas simples)
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+
+        # Renomeia colunas para padrão minúsculo
+        rename_map = {c: c.lower() for c in data.columns}
+        data.rename(columns=rename_map, inplace=True)
+
+        # Seleciona apenas as colunas OHLCV se existirem
+        ohlcv = ['open', 'high', 'low', 'close', 'volume']
+        cols = [c for c in ohlcv if c in data.columns]
+        if cols:
+            data = data[cols]
+
+        # LOG DETALHADO PARA DEBUG
+        logger.info(f"[DEBUG FETCH] {ticker} baixado: shape={data.shape}, columns={list(data.columns)}")
+        if not data.empty:
+            logger.info(f"[DEBUG FETCH] {ticker} primeiras linhas:\n{data.head(3)}")
 
         if data.empty:
             logger.warning(f"Nenhum dado retornado para {ticker} no período solicitado.")

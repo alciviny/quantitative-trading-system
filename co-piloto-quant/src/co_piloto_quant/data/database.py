@@ -83,8 +83,13 @@ def save_price_data(df: pd.DataFrame, ticker: str):
     """
     Salva dados OHLCV no SQLite usando uma abordagem vetorizada robusta.
     """
+
+    import logging
+    logger = logging.getLogger("DataSave")
     if df.empty:
+        logger.critical(f"[CRITICAL] DataFrame vazio para {ticker}. Nada será salvo!")
         return
+
 
     # 1. Garante índice Datetime
     if not isinstance(df.index, pd.DatetimeIndex):
@@ -93,56 +98,65 @@ def save_price_data(df: pd.DataFrame, ticker: str):
         except Exception:
             raise ValueError("O índice deve ser DatetimeIndex ou conversível para ele.")
 
-    # 2. Achata MultiIndex (comum em algumas fontes de dados)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    # 2.1 Remove colunas que são tuplas convertidas em strings
-    # Exemplo: "('close', 'petr4.sa')" vira só 'close'
-    new_cols = []
-    for c in df.columns:
-        if isinstance(c, tuple):
-            new_cols.append(str(c[0]))  # Pega o primeiro elemento da tupla
-        elif isinstance(c, str) and c.startswith("('") and c.endswith("')"):
-            # String que parece uma tupla serializada
-            new_cols.append(c.split("'")[1])  # Extrai o primeiro elemento
+    # 2. Normalização robusta de colunas OHLCV
+    import re
+    ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
+    new_df = pd.DataFrame(index=df.index)
+    for col in ohlcv_cols:
+        # Busca coluna exata (case insensitive)
+        found = [c for c in df.columns if (isinstance(c, str) and c.lower() == col)]
+        if found:
+            new_df[col] = df[found[0]]
+            continue
+        # Busca MultiIndex (ex: ('close', 'vale3.sa'))
+        found = [c for c in df.columns if (isinstance(c, tuple) and c[0].lower() == col)]
+        if found:
+            new_df[col] = df[found[0]]
+            continue
+        # Busca coluna que termina com .<ticker> (ex: close.vale3.sa)
+        found = [c for c in df.columns if isinstance(c, str) and c.lower().endswith('.' + ticker.lower()) and c.lower().startswith(col)]
+        if found:
+            new_df[col] = df[found[0]]
         else:
-            new_cols.append(str(c))
-    df.columns = new_cols
-    
-    # 2.2 Converte todas as colunas para lowercase
+            new_df[col] = float('nan')
+    df = new_df
+    # Converte todas as colunas para lowercase
     df.columns = [c.lower() for c in df.columns]
 
     # 3. Remove colunas duplicadas (mantém a última, que geralmente tem os dados corretos)
     df = df.loc[:, ~df.columns.duplicated(keep='last')]
 
+    # LOG: Mostra as primeiras linhas após normalização
+    logger.info(f"[DEBUG SAVE] {ticker} após normalização OHLCV:\n{df.head(3)}")
+
     # 4. Padroniza colunas (Case insensitive)
-    # Cria um mapa reverso para encontrar 'Open', 'open', 'OPEN', etc.
     curr_cols = {c.lower(): c for c in df.columns}
-    
     required_map = {
         'open': 'open', 'high': 'high', 'low': 'low', 'close': 'close', 'volume': 'volume'
     }
-    
     df_clean = pd.DataFrame(index=df.index)
-    
-    # Preenche as colunas necessárias, usando 0.0 se não existirem
     for req_lower, req_final in required_map.items():
         if req_lower in curr_cols:
             df_clean[req_final] = df[curr_cols[req_lower]].copy()
         else:
-            df_clean[req_final] = 0.0
+            df_clean[req_final] = float('nan')
 
-    # 5. Prepara dados para inserção
-    # Preenche NaN com 0.0
-    df_clean = df_clean.fillna(0.0)
+    # Blindagem institucional: só salva datas reais da fonte
+    mask_valid = (~df_clean[ohlcv_cols].isna()).all(axis=1) & (df_clean[ohlcv_cols] != 0).all(axis=1)
+    n_before = len(df_clean)
+    df_clean = df_clean[mask_valid]
+    n_after = len(df_clean)
+    if n_after < n_before:
+        logger.critical(f"[CRITICAL] {n_before-n_after} linhas removidas por conterem zero/NaN em OHLCV para {ticker}. Verifique expansão de datas no pipeline!")
+
+    if df_clean.empty:
+        logger.critical(f"[CRITICAL] Nenhuma linha válida para {ticker} após blindagem. Nada será salvo!")
+        return
 
     # Extrai datas diretamente do índice (independente do nome ser 'Date', 'index' ou None)
     dates = df_clean.index.strftime('%Y-%m-%d %H:%M:%S').tolist()
-    
     # Cria lista de tickers
     tickers = [ticker] * len(dates)
-    
     # Cria a lista de tuplas para o executemany
     records = list(zip(
         tickers,
@@ -153,7 +167,6 @@ def save_price_data(df: pd.DataFrame, ticker: str):
         df_clean['close'].tolist(),
         df_clean['volume'].tolist()
     ))
-
     if not records:
         return
 

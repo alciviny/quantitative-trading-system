@@ -121,6 +121,29 @@ def process_asset_history(ticker: str) -> pd.DataFrame | None:
         # Substituímos calculate_indicators por process_data
         df_tech = process_data(df)
         
+        # 4. Features para regime HMM (compatível com pipeline profissional)
+        window = 21
+        df['realized_volatility'] = df['close'].pct_change().rolling(window).std() * np.sqrt(window)
+        df['volatility_of_volatility'] = df['realized_volatility'].rolling(window).std()
+        returns = df['close'].pct_change()
+        trend = returns.rolling(window).mean()
+        noise = returns.rolling(window).std()
+        df['rolling_trend_strength'] = np.abs(trend / noise)
+        mean = returns.rolling(window).mean()
+        std = returns.rolling(window).std()
+        n = window
+        df['drift_t_stat'] = mean / (std / np.sqrt(n))
+        change = df['close'].diff(window).abs()
+        volatility = df['close'].diff().abs().rolling(window).sum()
+        df['efficiency_ratio'] = change / volatility
+        df['returns'] = returns
+        # Padronizar nomes para regime
+        df['hurst'] = df['hurst_val'] if 'hurst_val' in df.columns else np.nan
+        df['market_entropy'] = df['entropy_val'] if 'entropy_val' in df.columns else np.nan
+        # Preencher NaNs das features calculadas
+        for col in ['realized_volatility','volatility_of_volatility','rolling_trend_strength','drift_t_stat','efficiency_ratio','hurst','market_entropy','returns']:
+            df[col] = df[col].ffill().bfill()
+
         # Junta tudo no DataFrame principal
         # Apenas colunas novas para evitar duplicidade
         cols_to_use = df_tech.columns.difference(df.columns)
