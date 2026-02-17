@@ -6,6 +6,12 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 import logging
+import json_log_formatter
+try:
+    from pandas_profiling import ProfileReport
+    HAS_PROFILING = True
+except ImportError:
+    HAS_PROFILING = False
 import warnings
 from datetime import datetime
 
@@ -19,9 +25,15 @@ warnings.filterwarnings('ignore')
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s | %(levelname)s | %(message)s'
+    format='%(message)s'
 )
+formatter = json_log_formatter.JSONFormatter()
+handler = logging.StreamHandler()
+handler.setFormatter(formatter)
 logger = logging.getLogger("ML_Builder")
+logger.handlers = []
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 # -------------------------------------------------------
 # Importações do Sistema
@@ -203,10 +215,19 @@ def build_ml_dataset():
                 safe_ticker = ticker.replace('.', '_')
                 file_path = OUTPUT_DIR / f"{safe_ticker}.parquet" # <- Uso de pathlib
                 df_asset.to_parquet(file_path, index=False)
+            # Profiling pandas-profiling
+            if HAS_PROFILING:
+                profiling_dir = Path("data/profiling")
+                profiling_dir.mkdir(parents=True, exist_ok=True)
+                profile = ProfileReport(df_final[cols_final], title=f'Profile {ticker} - features', minimal=True)
+                profile_path = profiling_dir / f"{ticker}_features_profile.html"
+                profile.to_file(str(profile_path))
+                logger.info(json.dumps({"event": "profiling_saved", "ticker": ticker, "path": str(profile_path)}))
+
 
                 total_rows += len(df_asset)
                 success_count += 1
-
+            logger.error(json.dumps({"event": "error", "ticker": ticker, "error": str(e)}), exc_info=True)
             pbar.update(1)
 
     # Salva metadados do experimento

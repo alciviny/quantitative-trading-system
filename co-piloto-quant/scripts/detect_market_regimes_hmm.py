@@ -25,6 +25,7 @@ def run_regime_detection_for_file(enriched_path, output_dir):
     import warnings
     warnings.filterwarnings('ignore')
 
+    print(f'Iniciando processamento: {enriched_path.name}')
     data = pd.read_parquet(enriched_path)
 
     # 2. Adicionar returns
@@ -105,7 +106,7 @@ def run_regime_detection_for_file(enriched_path, output_dir):
         probs_full[end_train:end_test, :] = probs_win
 
     # 8. Preencher início com modelo global (caso rolling não cubra tudo)
-    if np.isnan(regimes_full).any():
+    if np.isnan(regimes_full[:window_train]).any():
         X_start = X.iloc[:window_train]
         scaler_start = StandardScaler()
         X_start_scaled = scaler_start.fit_transform(X_start)
@@ -115,6 +116,26 @@ def run_regime_detection_for_file(enriched_path, output_dir):
         regimes_full[:window_train] = regimes_start
         probs_start = model_start.predict_proba(X_start_scaled)
         probs_full[:window_train, :] = probs_start
+
+    # 9. Preencher FINAL com modelo treinado na última janela possível (garante cobertura total)
+    if np.isnan(regimes_full).any():
+        # Pega a última janela de treino possível
+        last_train_start = max(0, len(X) - window_train)
+        X_last = X.iloc[last_train_start:]
+        scaler_last = StandardScaler()
+        X_last_scaled = scaler_last.fit_transform(X_last)
+        model_last = GaussianHMM(n_components=best_n, covariance_type='diag', n_iter=1000, random_state=42)
+        model_last.fit(X_last_scaled)
+        # Preenche todos os NaNs restantes
+        nan_idx = np.where(np.isnan(regimes_full))[0]
+        if len(nan_idx) > 0:
+            # Garante que o shape bate
+            X_nan = X.iloc[nan_idx]
+            X_nan_scaled = scaler_last.transform(X_nan)
+            regimes_nan = model_last.predict(X_nan_scaled)
+            probs_nan = model_last.predict_proba(X_nan_scaled)
+            regimes_full[nan_idx] = regimes_nan
+            probs_full[nan_idx, :] = probs_nan
 
     data = data.copy()
     data['regime'] = regimes_full.astype(int)
@@ -139,6 +160,9 @@ if __name__ == "__main__":
     processed_files = list(features_dir.glob("*_processed.parquet"))
     for processed_path in processed_files:
         try:
+            print(f'---')
+            print(f'Processando arquivo: {processed_path.name}')
             run_regime_detection_for_file(processed_path, output_dir)
+            print(f'Concluído: {processed_path.name}\n')
         except Exception as e:
             print(f"Erro ao processar {processed_path.name}: {e}")
