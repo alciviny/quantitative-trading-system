@@ -1,0 +1,23 @@
+pandas
+numpy
+scikit-learn
+hmmlearn
+joblib
+ pandas-profiling
+ dvc
+ flake8
+ pytest
+ black
+ joblib
+ matplotlib
+ seaborn
+ tqdm
+ jupyter
+ notebook
+ scikit-image
+ scipy
+ statsmodels
+ yfinance
+ requests
+ python-dotenv
+great_expectations

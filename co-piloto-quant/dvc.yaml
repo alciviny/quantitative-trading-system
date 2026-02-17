@@ -1,0 +1,29 @@
+stages:
+  etl:
+    cmd: python scripts/etl_pipeline.py
+    deps:
+      - scripts/etl_pipeline.py
+      - data/raw/
+    outs:
+      - data/processed/
+  features:
+    cmd: python scripts/features_pipeline.py
+    deps:
+      - scripts/features_pipeline.py
+      - data/processed/
+    outs:
+      - data/features/
+  regimes:
+    cmd: python scripts/regimes_pipeline.py
+    deps:
+      - scripts/regimes_pipeline.py
+      - data/features/
+    outs:
+      - data/results_regimes/
+  validation:
+    cmd: python scripts/validate_pipeline.py
+    deps:
+      - scripts/validate_pipeline.py
+      - data/results_regimes/
+    outs:
+      - data/results_validation/
