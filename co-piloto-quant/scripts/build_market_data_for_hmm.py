@@ -4,6 +4,7 @@ Gera um dataset consolidado com as features necessárias para o pipeline HMM a p
 """
 import pandas as pd
 import numpy as np
+import os
 
 def realized_volatility(close, window=21):
     return close.pct_change().rolling(window).std() * np.sqrt(window)
@@ -30,9 +31,10 @@ def efficiency_ratio(close, window=21):
     return change / volatility
 
 def main():
-    # Escolha o ativo desejado
-    input_path = 'src/co_piloto_quant/data/features/VALE3_SA_enriched.parquet'
-    output_path = 'src/co_piloto_quant/data/processed/market_data.parquet'
+    import os
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    input_path = os.path.join(SCRIPT_DIR, '..', 'src', 'co_piloto_quant', 'data', 'features', 'VALE3.SA_features.parquet')
+    output_path = os.path.join(SCRIPT_DIR, '..', 'src', 'co_piloto_quant', 'data', 'processed', 'market_data.parquet')
     df = pd.read_parquet(input_path)
     
     # Calcula as features

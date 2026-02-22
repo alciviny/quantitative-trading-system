@@ -10,7 +10,7 @@ warnings.filterwarnings('ignore')
 import os
 
 # CONFIGURAÇÕES
-DATA_PATH = Path(__file__).parent.parent / 'data' / 'results'
+DATA_PATH = Path(__file__).parent.parent / 'src' / 'co_piloto_quant' / 'data' / 'results_regimes'
 PRICE_PATH = Path(__file__).parent.parent / 'data' / 'processed'
 
 # Definição dos períodos de stress
@@ -21,8 +21,10 @@ STRESS_PERIODS = [
 
 # Função para carregar dados
 def load_regime_data(asset_name):
-    # Corrige para não duplicar _SA se já estiver no nome
-    if asset_name.endswith('_SA'):
+    # Corrige para não duplicar _SA ou .SA
+    if asset_name.endswith('.SA'):
+        regime_file = DATA_PATH / f'{asset_name}_regimes_hmm.parquet'
+    elif asset_name.endswith('_SA'):
         regime_file = DATA_PATH / f'{asset_name}_regimes_hmm.parquet'
     else:
         regime_file = DATA_PATH / f'{asset_name}_SA_regimes_hmm.parquet'
@@ -36,9 +38,9 @@ def get_real_stress_regime_rolling(df, window=252):
             stress.append(0)
             continue
         sub = df.iloc[:i]
-        vol_threshold = sub['realized_volatility'].quantile(0.90)
-        ret_threshold = sub['returns'].quantile(0.05)
-        s = int((df.iloc[i]['realized_volatility'] >= vol_threshold) or (df.iloc[i]['returns'] <= ret_threshold))
+        vol_threshold = sub['volatility_21'].quantile(0.90)
+        ret_threshold = sub['daily_return'].quantile(0.05)
+        s = int((df.iloc[i]['volatility_21'] >= vol_threshold) or (df.iloc[i]['daily_return'] <= ret_threshold))
         stress.append(s)
     return pd.Series(stress, index=df.index)
 
@@ -49,7 +51,7 @@ def get_real_stress_regime_rolling(df, window=252):
 # Métricas de antecipação de crise
 def antecipacao_crise(df, stress_periods):
     results = []
-    regime_stats = df.groupby('regime')['realized_volatility'].mean()
+    regime_stats = df.groupby('regime')['volatility_21'].mean()
     stress_regime = regime_stats.idxmax()
     for start, end in stress_periods:
         pre_period = df.loc[df.index < start]
@@ -72,7 +74,7 @@ def antecipacao_crise(df, stress_periods):
 def regime_metrics(df):
     real_stress = get_real_stress_regime_rolling(df)
     regime_wf_valid = df['regime_wf'].copy()
-    regime_stats = df.loc[regime_wf_valid.notna()].groupby(regime_wf_valid[regime_wf_valid.notna()])['realized_volatility'].mean()
+    regime_stats = df.loc[regime_wf_valid.notna()].groupby(regime_wf_valid[regime_wf_valid.notna()])['volatility_21'].mean()
     if len(regime_stats) == 0:
         return np.nan, np.nan, np.nan, real_stress, np.zeros_like(real_stress), np.nan
     stress_regime = regime_stats.idxmax()
@@ -121,7 +123,7 @@ def persistencia_walkforward(df, n_states, window_train=756, window_test=63, fea
 def sharpe_por_regime(df):
     sharpes = {}
     for r in pd.Series(df['regime_wf']).dropna().unique():
-        ret = df.loc[df['regime_wf'] == r, 'returns']
+        ret = df.loc[df['regime_wf'] == r, 'daily_return']
         if ret.std() > 0:
             sharpe = ret.mean() / ret.std() * np.sqrt(252)
         else:
@@ -135,6 +137,8 @@ def matriz_confusao(real_stress, pred_stress):
 
 # Visualizações
 def plot_regimes(df, asset_name):
+    results_dir = os.path.join(Path(__file__).parent.parent, 'src', 'co_piloto_quant', 'data', 'results')
+    os.makedirs(results_dir, exist_ok=True)
     plt.figure(figsize=(14,6))
     plt.plot(df['close'], label='Preço')
     for r in df['regime_wf'].unique():
@@ -142,11 +146,11 @@ def plot_regimes(df, asset_name):
     plt.title(f'Preço com regimes - {asset_name}')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join('co-piloto-quant', 'data', 'results', f'{asset_name}_regimes_price.png'))
+    plt.savefig(os.path.join(results_dir, f'{asset_name}_regimes_price.png'))
     plt.close()
 
     # Probabilidade do regime de stress
-    regime_stats = df.groupby('regime_wf')['realized_volatility'].mean()
+    regime_stats = df.groupby('regime_wf')['volatility_21'].mean()
     stress_regime = regime_stats.idxmax()
     prob_col = f'regime_prob_wf_{stress_regime}'
     plt.figure(figsize=(14,4))
@@ -154,7 +158,7 @@ def plot_regimes(df, asset_name):
         plt.plot(df[prob_col], label='Probabilidade regime stress')
     plt.title(f'Probabilidade regime stress - {asset_name}')
     plt.tight_layout()
-    plt.savefig(os.path.join('co-piloto-quant', 'data', 'results', f'{asset_name}_regime_prob.png'))
+    plt.savefig(os.path.join(results_dir, f'{asset_name}_regime_prob.png'))
     plt.close()
 
     # Drawdown
@@ -165,12 +169,12 @@ def plot_regimes(df, asset_name):
     plt.title(f'Drawdown com regime stress - {asset_name}')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join('co-piloto-quant', 'data', 'results', f'{asset_name}_drawdown_regime.png'))
+    plt.savefig(os.path.join(results_dir, f'{asset_name}_drawdown_regime.png'))
     plt.close()
 
     # Visualização: histogramas dos retornos por regime
-    reg0 = df[df['regime_wf']==0]['returns'].dropna()
-    reg1 = df[df['regime_wf']==1]['returns'].dropna()
+    reg0 = df[df['regime_wf']==0]['daily_return'].dropna()
+    reg1 = df[df['regime_wf']==1]['daily_return'].dropna()
     plt.figure(figsize=(10,5))
     plt.hist(reg0, bins=50, alpha=0.6, label='Regime 0', color='blue', density=True)
     plt.hist(reg1, bins=50, alpha=0.6, label='Regime 1', color='orange', density=True)
@@ -179,7 +183,7 @@ def plot_regimes(df, asset_name):
     plt.ylabel('Densidade')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join('co-piloto-quant', 'data', 'results', 'regime_histogram.png'))
+    plt.savefig(os.path.join(results_dir, 'regime_histogram.png'))
     plt.close()
     print('\nHistograma salvo como regime_histogram.png')
 
@@ -201,7 +205,7 @@ def block_bootstrap_diff_means(grupo1, grupo2, n_boot=1000, block_size=10):
 def teste_retorno_futuro(df):
     df['ret_futuro'] = df['close'].shift(-5) / df['close'] - 1
     df = df.iloc[::5]  # Amostra não-overlapping
-    regime_stats = df.groupby('regime_wf')['realized_volatility'].mean()
+    regime_stats = df.groupby('regime_wf')['volatility_21'].mean()
     stress_regime = regime_stats.idxmax()
     grupo_stress = df.loc[df['regime_wf']==stress_regime, 'ret_futuro'].dropna().values
     grupo_nonstress = df.loc[df['regime_wf']!=stress_regime, 'ret_futuro'].dropna().values
@@ -241,7 +245,7 @@ def walk_forward_regime_detection(df, features, n_states, window_train=756, wind
 def calcular_lag(df, stress_regime, stress_periods):
     lags = []
     for start, end in stress_periods:
-        regime_stats = df.groupby('regime_wf')['realized_volatility'].mean()
+        regime_stats = df.groupby('regime_wf')['volatility_21'].mean()
         pre_period = df.loc[df.index < start]
         prob_col = f'regime_prob_wf_{stress_regime}'
         if prob_col in pre_period.columns:
@@ -307,7 +311,7 @@ def calibrar_threshold_roc(real_stress, probas):
 
 # Relatório final
 def gerar_relatorio(asset_name, antecipacao, precision, recall, f1, emp_persist, pred_persist, sharpes, conf_matrix, stat, p, lag, falsos_alarmes, roc_auc):
-    results_dir = os.path.join('co-piloto-quant', 'data', 'results')
+    results_dir = os.path.join(Path(__file__).parent.parent, 'src', 'co_piloto_quant', 'data', 'results')
     os.makedirs(results_dir, exist_ok=True)
     with open(os.path.join(results_dir, f'{asset_name}_regime_validation_report.txt'), 'w') as f:
         f.write('==== Validação Quantitativa do Detector de Regimes (' + str(asset_name) + ') ====' + '\n')
@@ -349,8 +353,8 @@ def experimento_separabilidade(df, features, n_states):
 
     # Divergência Wasserstein entre retornos dos regimes
     from scipy.stats import wasserstein_distance
-    reg0 = df[df['regime_wf']==0]['returns'].dropna()
-    reg1 = df[df['regime_wf']==1]['returns'].dropna()
+    reg0 = df[df['regime_wf']==0]['daily_return'].dropna()
+    reg1 = df[df['regime_wf']==1]['daily_return'].dropna()
     if len(reg0) > 0 and len(reg1) > 0:
         w_dist = wasserstein_distance(reg0, reg1)
         print(f'\nWasserstein entre retornos regime 0 e 1: {w_dist:.4f}')
@@ -359,8 +363,8 @@ def experimento_separabilidade(df, features, n_states):
 
     # Experimento: divergência KL entre retornos dos regimes
     from scipy.stats import entropy
-    reg0 = df[df['regime_wf']==0]['returns'].dropna()
-    reg1 = df[df['regime_wf']==1]['returns'].dropna()
+    reg0 = df[df['regime_wf']==0]['daily_return'].dropna()
+    reg1 = df[df['regime_wf']==1]['daily_return'].dropna()
     bins = 50
     if len(reg0) > 0 and len(reg1) > 0:
         hist0, bin_edges = np.histogram(reg0, bins=bins, density=True)
@@ -376,21 +380,63 @@ def experimento_separabilidade(df, features, n_states):
 
 # MAIN
 if __name__ == '__main__':
-    asset_name = 'ITUB4_SA'  # Troque para o nome do arquivo desejado
+    asset_name = 'VALE3.SA'  # Troque para o nome do arquivo desejado
     df = load_regime_data(asset_name)
     df.index = pd.to_datetime(df['date']) if 'date' in df.columns else pd.to_datetime(df.index)
     df.name = asset_name
 
-    features = [
-        'realized_volatility',
-        'volatility_of_volatility',
-        'rolling_trend_strength',
-        'drift_t_stat',
-        'efficiency_ratio',
-        'hurst',
-        'market_entropy',
-        'returns',
+    # Lista de features desejadas
+    desired_features = [
+        'volatility_21',
+        'hurst_72_returns',
+        'entropy_20',
+        'Choppiness_14',
+        'beta_60',
+        'half_life_60',
+        'r2_60',
+        'sigma_resid_60',
+        't_beta_60',
+        'WWMA_200',
+        'IFR_120',
+        'IFR_50',
+        'stoch_d_80_3_3',
+        'stoch_k_80_3',
+        'obtr',
+        'wad',
+        'daily_return',
+        'close',
     ]
+    # Seleciona apenas as features presentes no arquivo
+    features = [f for f in desired_features if f in df.columns]
+    # Remove linhas com NaN nas features selecionadas
+    n_nan = df[features].isnull().any(axis=1).sum()
+    if n_nan > 0:
+        print(f"Removendo {n_nan} linhas com NaN nas features selecionadas.")
+        df = df.dropna(subset=features)
+
+    # Lista de features desejadas
+    desired_features = [
+        'volatility_21',
+        'hurst_72_returns',
+        'entropy_20',
+        'Choppiness_14',
+        'beta_60',
+        'half_life_60',
+        'r2_60',
+        'sigma_resid_60',
+        't_beta_60',
+        'WWMA_200',
+        'IFR_120',
+        'IFR_50',
+        'stoch_d_80_3_3',
+        'stoch_k_80_3',
+        'obtr',
+        'wad',
+        'daily_return',
+        'close',
+    ]
+    # Seleciona apenas as features presentes no arquivo
+    features = [f for f in desired_features if f in df.columns]
     n_states = 2  # Fixar ex-ante
     regimes_full, probs_full = walk_forward_regime_detection(df, features, n_states)
     # Usar float para regime_wf, evitando Int64 com NaN
