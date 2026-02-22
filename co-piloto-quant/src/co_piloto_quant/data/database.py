@@ -4,10 +4,8 @@ from pathlib import Path
 
 from co_piloto_quant.config import DATABASE_PATH
 
-# O diretório do banco de dados (RAW_DIR) já é criado pelo config.py
-# Garante que o arquivo do banco de dados exista para a conexão inicial.
-if not DATABASE_PATH.parent.exists():
-    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# Não cria diretórios automaticamente aqui, apenas usa o caminho do config
 
 DB_PATH = DATABASE_PATH
 

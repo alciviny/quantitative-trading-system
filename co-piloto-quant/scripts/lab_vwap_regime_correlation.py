@@ -188,10 +188,10 @@ def run_laboratory():
     # ========================================================
     # 💾 SALVAR
     # ========================================================
-    os.makedirs("data/lab_results", exist_ok=True)
-    table.to_csv("data/lab_results/vwap_regime_forward_returns.csv")
+    os.makedirs("src/co_piloto_quant/data/lab_results", exist_ok=True)
+    table.to_csv("src/co_piloto_quant/data/lab_results/vwap_regime_forward_returns.csv")
 
-    print("\n💾 Salvo em data/lab_results/vwap_regime_forward_returns.csv")
+    print("\n💾 Salvo em src/co_piloto_quant/data/lab_results/vwap_regime_forward_returns.csv")
 
 # ============================================================
 if __name__ == "__main__":

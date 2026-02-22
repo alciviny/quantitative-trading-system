@@ -50,10 +50,17 @@ def _ehlers_wrapper(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
     return ehlers_sinewave(data, column='close')
 
 def _chop_wrapper(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
-    # O Choppiness Index nativo do Pandas TA
-    # length=14 é o padrão clássico do Dreiss
-    chop = data.ta.chop(length=kwargs.get('window', 14))
-    return chop.to_frame(name='Choppiness_14')
+    # Choppiness Index manual
+    window = kwargs.get('window', 14)
+    high = data['high']
+    low = data['low']
+    # Range total da janela
+    total_range = high.rolling(window).max() - low.rolling(window).min()
+    # Soma dos ranges diários
+    sum_range = (high - low).rolling(window).sum()
+    # Fórmula clássica
+    choppiness = 100 * np.log10(sum_range / total_range) / np.log10(window)
+    return choppiness.to_frame(name=f'Choppiness_{window}')
 
 
 class IndicatorEngine:

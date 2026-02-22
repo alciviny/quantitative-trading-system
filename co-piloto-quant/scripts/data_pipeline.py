@@ -264,7 +264,7 @@ def process_single_ticker(ticker: str, force_update: bool = False) -> Dict[str, 
             logger.warning(f"{ticker}: Aviso ao salvar SQLite - {e}")
         
         # 6. Persistência em Parquet (Feature Store - dados enriquecidos)
-        features_path = Path(__file__).parent.parent / "data" / "features"
+        features_path = Path(__file__).parent.parent / "src" / "co_piloto_quant" / "data" / "features"
         features_path.mkdir(parents=True, exist_ok=True)
         
         safe_ticker = ticker.replace('.SA', '_SA').replace('^', '_').replace('=', '_')
@@ -278,7 +278,7 @@ def process_single_ticker(ticker: str, force_update: bool = False) -> Dict[str, 
             'status': 'success',
             'rows': len(df_enriched),
             'columns': len(df_enriched.columns),
-            'sqlite_path': 'data/raw/market_data.db',
+            'sqlite_path': 'src/co_piloto_quant/data/raw/market_data.db',
             'parquet_path': str(output_file.relative_to(Path(__file__).parent.parent))
         }
         
@@ -363,8 +363,8 @@ def run_pipeline(tickers: Optional[List[str]] = None, force_update: bool = False
     
     logger.info("")
     logger.info("📦 Persistência:")
-    logger.info(f"   📊 Dados brutos (OHLCV): data/raw/market_data.db")
-    logger.info(f"   🎯 Features computadas: data/features/*_enriched.parquet")
+    logger.info("   📊 Dados brutos (OHLCV): src/co_piloto_quant/data/raw/market_data.db")
+    logger.info("   🎯 Features computadas: src/co_piloto_quant/data/features/*_enriched.parquet")
     logger.info("")
     
     if errors:

@@ -30,10 +30,10 @@ app.add_middleware(
 )
 
 # ========== CAMINHOS DOS DADOS ==========
-BASE_PATH = Path(__file__).parent / "co-piloto-quant"
-PARQUET_PATH = BASE_PATH / "data" / "processed"
-FEATURES_PATH = BASE_PATH / "data" / "features"  # Feature Store
-RESULTS_PATH = BASE_PATH / "data" / "results"
+BASE_PATH = Path(__file__).parent / "co-piloto-quant" / "src" / "co_piloto_quant" / "data"
+PARQUET_PATH = BASE_PATH / "processed"
+FEATURES_PATH = BASE_PATH / "features"  # Feature Store
+RESULTS_PATH = BASE_PATH / "results"
 
 # Cache simples em memória
 _cache = {}
@@ -361,26 +361,24 @@ async def get_assets():
     try:
         tickers = get_available_tickers()[:20]  # Limita a 20 para performance
         assets = []
-        
+        erros = []
         for ticker in tickers:
             try:
                 parquet_file = PARQUET_PATH / f"{ticker}.parquet"
                 if not parquet_file.exists():
+                    logger.warning(f"Ativo ausente: {ticker} (arquivo não encontrado)")
                     continue
-                    
                 df = pd.read_parquet(parquet_file)
                 if df.empty:
+                    logger.warning(f"Ativo ausente: {ticker} (arquivo vazio)")
                     continue
-                
                 # Pega última linha
                 latest = df.iloc[-1]
                 prev = df.iloc[-2] if len(df) > 1 else latest
-                
                 # Calcula variação percentual
                 close = float(latest.get('close', 0))
                 prev_close = float(prev.get('close', close))
                 change_pct = ((close - prev_close) / prev_close * 100) if prev_close > 0 else 0
-                
                 asset = {
                     "ticker": ticker,
                     "name": ticker,
@@ -397,7 +395,6 @@ async def get_assets():
                     "ml_probability": 50.0,
                     "last_signal": pd.Timestamp.now().isoformat()
                 }
-                
                 # Determina status da estratégia baseado em RSI
                 rsi = asset["rsi"]
                 if rsi < 30:
@@ -406,13 +403,12 @@ async def get_assets():
                 elif rsi > 70:
                     asset["strategy_status"] = "SELL"
                     asset["ml_probability"] = 65.0
-                
                 assets.append(asset)
             except Exception as e:
                 logger.warning(f"Erro ao processar {ticker}: {e}")
+                erros.append({"ticker": ticker, "erro": str(e)})
                 continue
-        
-        logger.info(f"✅ {len(assets)} ativos retornados")
+        logger.info(f"✅ {len(assets)} ativos retornados, {len(erros)} ignorados por erro/ausência")
         return assets
     except Exception as e:
         logger.error(f"Erro ao listar ativos: {e}")

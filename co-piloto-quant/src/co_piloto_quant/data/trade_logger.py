@@ -7,14 +7,13 @@ import numpy as np
 
 # Tenta importar a configuração, com fallback seguro
 try:
-    from co_piloto_quant.config import DATA_PATH
+    from co_piloto_quant.config import DATA_DIR
 except (ModuleNotFoundError, ImportError):
     # Fallback para o caso de o script ser executado de forma isolada
-    DATA_PATH = Path(__file__).resolve().parent.parent.parent / "data"
+    DATA_DIR = Path(__file__).resolve().parent.parent.parent / "src" / "co_piloto_quant" / "data"
 
-# Garante que o diretório de dados exista
-DATA_PATH.mkdir(parents=True, exist_ok=True)
-DB_PATH = DATA_PATH / "trades.db"
+# Não cria diretórios automaticamente aqui
+DB_PATH = DATA_DIR / "trades.db"
 
 class CustomJSONEncoder(json.JSONEncoder):
     """

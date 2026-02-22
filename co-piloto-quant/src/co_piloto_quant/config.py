@@ -11,8 +11,8 @@ load_dotenv()
 # Isso torna o código robusto para ser executado de qualquer lugar.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# Define o diretório de dados principal na raiz do projeto
-DATA_DIR = PROJECT_ROOT / "data"
+# Define o diretório de dados principal DENTRO do src (padrão novo)
+DATA_DIR = PROJECT_ROOT / "src" / "co_piloto_quant" / "data"
 
 # Cria constantes explícitas para cada subdiretório de dados
 RAW_DIR = DATA_DIR / "raw"
@@ -20,11 +20,7 @@ PROCESSED_DIR = DATA_DIR / "processed"
 RESULTS_DIR = DATA_DIR / "results"
 MODELS_DIR = PROJECT_ROOT / "models" # Adicionado para consistência
 
-# Garante que todos os diretórios de dados existam ao iniciar
-RAW_DIR.mkdir(parents=True, exist_ok=True)
-PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-MODELS_DIR.mkdir(parents=True, exist_ok=True)
+# Não cria diretórios automaticamente aqui para evitar sobrescrita indevida
 
 
 # --- 2. CONFIGURAÇÕES DA ESTRATÉGIA (O CÉREBRO) ---

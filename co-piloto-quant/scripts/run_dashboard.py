@@ -163,7 +163,7 @@ def plot_dna_chart(df):
 
 # --- Início do App ---
 st.title("🦅 Dashboard de Análise Quant")
-log_dir = "data/strategy_logs"
+log_dir = "src/co_piloto_quant/data/strategy_logs"
 log_files = get_log_files(log_dir)
 
 if not log_files:

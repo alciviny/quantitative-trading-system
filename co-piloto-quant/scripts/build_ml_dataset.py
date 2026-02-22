@@ -217,7 +217,7 @@ def build_ml_dataset():
                 df_asset.to_parquet(file_path, index=False)
             # Profiling pandas-profiling
             if HAS_PROFILING:
-                profiling_dir = Path("data/profiling")
+                profiling_dir = Path("src/co_piloto_quant/data/profiling")
                 profiling_dir.mkdir(parents=True, exist_ok=True)
                 profile = ProfileReport(df_final[cols_final], title=f'Profile {ticker} - features', minimal=True)
                 profile_path = profiling_dir / f"{ticker}_features_profile.html"

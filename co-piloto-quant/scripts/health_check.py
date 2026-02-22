@@ -15,7 +15,7 @@ except (ModuleNotFoundError, ImportError) as e:
     print(f"❌ Erro Crítico: Não foi possível importar a configuração do banco de dados. Verifique o sys.path e a estrutura do projeto.")
     print(f"Detalhe: {e}")
     # Fallback para um caminho padrão se a importação falhar
-    DB_PATH = "data/market_data.db"
+    DB_PATH = "src/co_piloto_quant/data/market_data.db"
 
 
 def run_health_check():

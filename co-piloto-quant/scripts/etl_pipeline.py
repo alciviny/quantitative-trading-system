@@ -1,3 +1,4 @@
+
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -7,6 +8,9 @@ try:
     HAS_PROFILING = True
 except ImportError:
     HAS_PROFILING = False
+
+# Base de dados centralizada
+DATA_BASE = os.path.join('src', 'co_piloto_quant', 'data')
 
 import argparse
 import logging
@@ -29,7 +33,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     setup_logging()
     logging.info(f'Iniciando ETL para {args.asset}')
-    df = load_parquet(f'data/raw/{args.asset}.parquet')
+    df = load_parquet(os.path.join(DATA_BASE, 'raw', f'{args.asset}.parquet'))
     logging.info(f'Perfil dos dados: {profile_data(df)}')
     # Validação automática com Great Expectations
     gdf = ge.from_pandas(df)
@@ -40,7 +44,8 @@ if __name__ == '__main__':
     logging.info('Validação de dados (Great Expectations) passou com sucesso.')
     if HAS_PROFILING:
         profile = ProfileReport(df, title=f'Profile {args.asset} - ETL', minimal=True)
-        profile.to_file(f'data/processed/{args.asset}_profile_etl.html')
-        logging.info(f'Relatório de qualidade salvo em data/processed/{args.asset}_profile_etl.html')
-    save_parquet(df, f'data/processed/{args.asset}.parquet')
-    logging.info(f'Arquivo salvo em data/processed/{args.asset}.parquet')
+        profile_path = os.path.join(DATA_BASE, 'processed', f'{args.asset}_profile_etl.html')
+        profile.to_file(profile_path)
+        logging.info(f'Relatório de qualidade salvo em {profile_path}')
+    save_parquet(df, os.path.join(DATA_BASE, 'processed', f'{args.asset}.parquet'))
+    logging.info(f'Arquivo salvo em {os.path.join(DATA_BASE, 'processed', f'{args.asset}.parquet')}')

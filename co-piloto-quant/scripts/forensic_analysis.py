@@ -42,9 +42,9 @@ logging.basicConfig(
 logger = logging.getLogger("forensic")
 
 # Defaults - podem ser sobrescritos por CLI
-BACKTEST_REPORT = Path("data/reports/ranking_backtest.csv")
-MARKET_DNA = Path("data/reports/b3_market_dna.csv")
-OUT_DIR = Path("data/reports/forensic")
+BACKTEST_REPORT = Path("src/co_piloto_quant/data/reports/ranking_backtest.csv")
+MARKET_DNA = Path("src/co_piloto_quant/data/reports/b3_market_dna.csv")
+OUT_DIR = Path("src/co_piloto_quant/data/reports/forensic")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Parâmetros estatísticos

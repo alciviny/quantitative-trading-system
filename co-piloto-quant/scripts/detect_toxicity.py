@@ -40,8 +40,8 @@ from co_piloto_quant.data.database import load_price_data
 from co_piloto_quant.analysis import calculate_indicators
 
 # --- CONFIGURAÇÕES ---
-REPORT_PATH = 'data/reports/ranking_backtest.csv'
-PLOTS_DIR = 'data/plots'
+REPORT_PATH = 'src/co_piloto_quant/data/reports/ranking_backtest.csv'
+PLOTS_DIR = 'src/co_piloto_quant/data/plots'
 MIN_DATA_POINTS = 200
 ROLL_ZSCORE_WINDOW = 100  # para rolling zscore
 TAIL_PERCENTILE = 0.05    # tail risk 5%
@@ -373,14 +373,14 @@ def main():
     logger.info(f"Dataset de features extraído: {df_features.shape}")
 
     # Salva snapshot das features (útil para auditoria)
-    os.makedirs('data/features', exist_ok=True)
-    features_path = 'data/features/features_snapshot.parquet'
+    os.makedirs('src/co_piloto_quant/data/features', exist_ok=True)
+    features_path = 'src/co_piloto_quant/data/features/features_snapshot.parquet'
     try:
         df_features.to_parquet(features_path, index=False)
         logger.info(f"Snapshot de features salvo: {features_path}")
     except Exception:
         # fallback CSV
-        df_features.to_csv('data/features/features_snapshot.csv', index=False)
+        df_features.to_csv('src/co_piloto_quant/data/features/features_snapshot.csv', index=False)
         logger.info("Snapshot salvo em csv (fallback).")
 
     # Modelagem

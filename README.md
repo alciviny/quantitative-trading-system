@@ -1,17 +1,21 @@
-# Co-Piloto Quantitativo
 
-Sistema de análise quantitativa para mercado financeiro com backend Python e frontend React.
+# Quantitative Trading System
 
-## 🚀 Quick Start
+Sistema completo de análise quantitativa para o mercado financeiro, com backend Python (FastAPI) e frontend React.
+
+---
+
+## 🚀 Início Rápido
 
 ### Backend (API)
 ```bash
-cd "C:\Users\JC INFO\Desktop\SSD-SUPORTE QUANTITATIVO"
-& "co-piloto-quant\vbt_env\Scripts\Activate.ps1"
+cd co-piloto-quant
+# Ative o ambiente virtual, se necessário
+# Exemplo para Windows:
+vbt_env\Scripts\Activate.ps1
 python api_backend.py
 ```
-
-Acesse: http://localhost:8001
+Acesse: [http://localhost:8001](http://localhost:8001)
 
 ### Frontend
 ```bash
@@ -19,45 +23,62 @@ cd co-piloto-frontend
 npm install
 npm run dev
 ```
+Acesse: [http://localhost:3001](http://localhost:3001)
 
-Acesse: http://localhost:3001
+---
 
-## 📁 Estrutura
+## 📁 Estrutura do Projeto
 
 ```
-├── api_backend.py          # API FastAPI principal
-├── api_example.py          # API de exemplo
-├── co-piloto-quant/        # Backend Python
-│   ├── scripts/            # Scripts de análise
-│   ├── src/                # Código fonte
-│   ├── data/               # Dados (não versionado)
-│   └── models/             # Modelos ML (não versionado)
-└── co-piloto-frontend/     # Frontend React
-    ├── src/
-    └── package.json
+quantitative-trading-system/
+├── co-piloto-quant/      # Backend Python (scripts, src/, models/)
+├── co-piloto-frontend/   # Frontend React (src/, configs)
+├── docs/                 # Documentação detalhada
+├── README.md             # Este arquivo
+└── .gitignore
 ```
 
-## 📊 Features
+---
 
-- ✅ Análise quantitativa de ativos B3
-- ✅ Indicadores técnicos e físicos de mercado
-- ✅ Dashboard interativo React
-- ✅ API REST com FastAPI
-- ✅ Backtesting e análise de estratégias
+## 📚 Documentação
+
+- [Fluxo de Dados e Diretórios](docs/DATA_FLOW.md)
+- [Arquitetura do Sistema](docs/ARQUITETURA_SISTEMA.md)
+- [Guia do Pipeline](docs/README_PIPELINE.md)
+- [Frontend: Como Iniciar](co-piloto-frontend/COMO_INICIAR.md)
+- [Resolução de Problemas](co-piloto-frontend/PROBLEMAS_RESOLVIDOS.md)
+
+---
+
+## 📊 Funcionalidades
+
+- Análise quantitativa de ativos B3
+- Indicadores técnicos e físicos
+- Dashboard interativo (React)
+- API REST (FastAPI)
+- Backtesting e análise de estratégias
+
+---
 
 ## 🔧 Tecnologias
 
-**Backend:**
-- Python 3.9+
-- FastAPI
-- Pandas + PyArrow
-- vectorbt
+**Backend:** Python 3.9+, FastAPI, Pandas, PyArrow, vectorbt  
+**Frontend:** React 18, TypeScript, Vite, Tailwind CSS, TanStack Query
 
-**Frontend:**
-- React 18 + TypeScript
-- Vite
-- Tailwind CSS
-- TanStack Query
+---
+
+## ⚠️ Nota sobre Dados
+
+Arquivos de dados (`.parquet`, `.csv`, `.db`) e modelos (`.joblib`) **não são versionados**. Eles são gerados localmente pelos scripts em `co-piloto-quant/scripts/`.  
+Todos os dados devem ser salvos apenas em `src/co_piloto_quant/data/` conforme o padrão documentado.
+
+---
+
+## 📄 Licença
+
+Projeto pessoal para fins de estudo e pesquisa em trading quantitativo.
+
+---
 
 ## 📝 Documentação
 

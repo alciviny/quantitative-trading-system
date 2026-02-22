@@ -42,11 +42,11 @@ if __name__ == '__main__':
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     logger.info(json.dumps({"event": "start_validation", "asset": args.asset}))
-    df = load_parquet(f'data/results_regimes/{args.asset}_regimes_hmm.parquet')
+    df = load_parquet(f'src/co_piloto_quant/data/results_regimes/{args.asset}_regimes_hmm.parquet')
     logger.info(json.dumps({"event": "profile_validation", "asset": args.asset, "profile": profile_data(df)}))
     # Profiling validação
     if HAS_PROFILING:
-        profiling_dir = Path("data/profiling")
+        profiling_dir = Path("src/co_piloto_quant/data/profiling")
         profiling_dir.mkdir(parents=True, exist_ok=True)
         profile = ProfileReport(df, title=f'Profile {args.asset} - validation', minimal=True)
         profile_path = profiling_dir / f"{args.asset}_profile_validation.html"
@@ -59,8 +59,8 @@ if __name__ == '__main__':
     logger.info(json.dumps({"event": "validation_passed", "asset": args.asset, "stage": "validation"}))
     if HAS_PROFILING:
         profile = ProfileReport(df, title=f'Profile {args.asset} - validation', minimal=True)
-        profile.to_file(f'data/results_validation/{args.asset}_profile_validation.html')
-        logging.info(f'Relatório de qualidade salvo em data/results_validation/{args.asset}_profile_validation.html')
+        profile.to_file(f'src/co_piloto_quant/data/results_validation/{args.asset}_profile_validation.html')
+        logging.info(f'Relatório de qualidade salvo em src/co_piloto_quant/data/results_validation/{args.asset}_profile_validation.html')
     stress_periods = [
         ('2020-02-15', '2020-04-15'),
         ('2022-03-01', '2022-07-01'),

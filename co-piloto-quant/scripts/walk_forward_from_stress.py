@@ -404,7 +404,7 @@ def main():
     parser.add_argument('--bb-std-volatile', type=float, default=2.5)
     parser.add_argument('--max-half-life', type=int, default=25)
     parser.add_argument('--workers', type=int, default=DEFAULT_WORKERS)
-    parser.add_argument('--out', type=str, default='walk_forward_results.csv')
+    parser.add_argument('--out', type=str, default='src/co_piloto_quant/data/walk_forward_results.csv')
 
     args = parser.parse_args()
     

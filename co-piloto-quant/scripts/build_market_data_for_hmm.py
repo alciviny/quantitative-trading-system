@@ -31,8 +31,8 @@ def efficiency_ratio(close, window=21):
 
 def main():
     # Escolha o ativo desejado
-    input_path = 'co-piloto-quant/data/features/VALE3_SA_enriched.parquet'
-    output_path = 'co-piloto-quant/data/processed/market_data.parquet'
+    input_path = 'src/co_piloto_quant/data/features/VALE3_SA_enriched.parquet'
+    output_path = 'src/co_piloto_quant/data/processed/market_data.parquet'
     df = pd.read_parquet(input_path)
     
     # Calcula as features
