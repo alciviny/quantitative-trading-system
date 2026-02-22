@@ -88,7 +88,6 @@ def save_price_data(df: pd.DataFrame, ticker: str):
         logger.critical(f"[CRITICAL] DataFrame vazio para {ticker}. Nada será salvo!")
         return
 
-
     # 1. Garante índice Datetime
     if not isinstance(df.index, pd.DatetimeIndex):
         try:
@@ -96,66 +95,16 @@ def save_price_data(df: pd.DataFrame, ticker: str):
         except Exception:
             raise ValueError("O índice deve ser DatetimeIndex ou conversível para ele.")
 
-    # 2. Normalização robusta de colunas OHLCV
-    import re
-    ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
-    new_df = pd.DataFrame(index=df.index)
-    for col in ohlcv_cols:
-        # Busca coluna exata (case insensitive)
-        found = [c for c in df.columns if (isinstance(c, str) and c.lower() == col)]
-        if found:
-            new_df[col] = df[found[0]]
-            continue
-        # Busca MultiIndex (ex: ('close', 'vale3.sa'))
-        found = [c for c in df.columns if (isinstance(c, tuple) and c[0].lower() == col)]
-        if found:
-            new_df[col] = df[found[0]]
-            continue
-        # Busca coluna que termina com .<ticker> (ex: close.vale3.sa)
-        found = [c for c in df.columns if isinstance(c, str) and c.lower().endswith('.' + ticker.lower()) and c.lower().startswith(col)]
-        if found:
-            new_df[col] = df[found[0]]
-        else:
-            new_df[col] = float('nan')
-    df = new_df
-    # Converte todas as colunas para lowercase
-    df.columns = [c.lower() for c in df.columns]
-
-    # 3. Remove colunas duplicadas (mantém a última, que geralmente tem os dados corretos)
-    df = df.loc[:, ~df.columns.duplicated(keep='last')]
-
-    # LOG: Mostra as primeiras linhas após normalização
+    df = normalize_ohlcv(df, ticker)
     logger.info(f"[DEBUG SAVE] {ticker} após normalização OHLCV:\n{df.head(3)}")
-
-    # 4. Padroniza colunas (Case insensitive)
-    curr_cols = {c.lower(): c for c in df.columns}
-    required_map = {
-        'open': 'open', 'high': 'high', 'low': 'low', 'close': 'close', 'volume': 'volume'
-    }
-    df_clean = pd.DataFrame(index=df.index)
-    for req_lower, req_final in required_map.items():
-        if req_lower in curr_cols:
-            df_clean[req_final] = df[curr_cols[req_lower]].copy()
-        else:
-            df_clean[req_final] = float('nan')
-
-    # Blindagem institucional: só salva datas reais da fonte
-    mask_valid = (~df_clean[ohlcv_cols].isna()).all(axis=1) & (df_clean[ohlcv_cols] != 0).all(axis=1)
-    n_before = len(df_clean)
-    df_clean = df_clean[mask_valid]
-    n_after = len(df_clean)
-    if n_after < n_before:
-        logger.critical(f"[CRITICAL] {n_before-n_after} linhas removidas por conterem zero/NaN em OHLCV para {ticker}. Verifique expansão de datas no pipeline!")
-
-    if df_clean.empty:
-        logger.critical(f"[CRITICAL] Nenhuma linha válida para {ticker} após blindagem. Nada será salvo!")
+    df_clean = padroniza_colunas(df)
+    ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
+    df_clean = blindagem(df_clean, ohlcv_cols, ticker, logger)
+    if df_clean is None:
         return
 
-    # Extrai datas diretamente do índice (independente do nome ser 'Date', 'index' ou None)
     dates = df_clean.index.strftime('%Y-%m-%d %H:%M:%S').tolist()
-    # Cria lista de tickers
     tickers = [ticker] * len(dates)
-    # Cria a lista de tuplas para o executemany
     records = list(zip(
         tickers,
         dates,
@@ -168,7 +117,6 @@ def save_price_data(df: pd.DataFrame, ticker: str):
     if not records:
         return
 
-    # 6. Executa Upsert em Lote
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
@@ -176,12 +124,59 @@ def save_price_data(df: pd.DataFrame, ticker: str):
                 INSERT OR REPLACE INTO ohlcv (ticker, date, open, high, low, close, volume)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, records)
-
             cursor.execute("INSERT OR REPLACE INTO assets (ticker, last_update) VALUES (?, CURRENT_TIMESTAMP)", (ticker,))
             conn.commit()
     except Exception as e:
         print(f"ERRO CRÍTICO ao salvar {ticker} no banco: {e}")
 
+def find_col(df, col, ticker):
+    # Busca coluna exata (case insensitive)
+    for c in df.columns:
+        if isinstance(c, str) and c.lower() == col:
+            return df[c]
+    # Busca MultiIndex (ex: ('close', 'vale3.sa'))
+    for c in df.columns:
+        if isinstance(c, tuple) and c[0].lower() == col:
+            return df[c]
+    # Busca coluna que termina com .<ticker> (ex: close.vale3.sa)
+    for c in df.columns:
+        if isinstance(c, str) and c.lower().endswith('.' + ticker.lower()) and c.lower().startswith(col):
+            return df[c]
+    return pd.Series([float('nan')] * len(df), index=df.index)
+
+def normalize_ohlcv(df, ticker):
+    ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
+    new_df = pd.DataFrame(index=df.index)
+    for col in ohlcv_cols:
+        new_df[col] = find_col(df, col, ticker)
+    new_df.columns = [c.lower() for c in new_df.columns]
+    new_df = new_df.loc[:, ~new_df.columns.duplicated(keep='last')]
+    return new_df
+
+def padroniza_colunas(df):
+    curr_cols = {c.lower(): c for c in df.columns}
+    required_map = {
+        'open': 'open', 'high': 'high', 'low': 'low', 'close': 'close', 'volume': 'volume'
+    }
+    df_clean = pd.DataFrame(index=df.index)
+    for req_lower, req_final in required_map.items():
+        if req_lower in curr_cols:
+            df_clean[req_final] = df[curr_cols[req_lower]].copy()
+        else:
+            df_clean[req_final] = float('nan')
+    return df_clean
+
+def blindagem(df_clean, ohlcv_cols, ticker, logger):
+    mask_valid = (~df_clean[ohlcv_cols].isna()).all(axis=1) & (df_clean[ohlcv_cols] != 0).all(axis=1)
+    n_before = len(df_clean)
+    df_clean = df_clean[mask_valid]
+    n_after = len(df_clean)
+    if n_after < n_before:
+        logger.critical(f"[CRITICAL] {n_before-n_after} linhas removidas por conterem zero/NaN em OHLCV para {ticker}. Verifique expansão de datas no pipeline!")
+    if df_clean.empty:
+        logger.critical(f"[CRITICAL] Nenhuma linha válida para {ticker} após blindagem. Nada será salvo!")
+        return None
+    return df_clean
 def load_price_data(ticker: str) -> pd.DataFrame:
     """Lê dados do banco e retorna com Index Datetime e colunas minúsculas."""
     with sqlite3.connect(DB_PATH) as conn:

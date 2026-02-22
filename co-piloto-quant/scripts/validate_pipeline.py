@@ -11,7 +11,7 @@ except ImportError:
 import argparse
 import logging
 import json
-import json_log_formatter
+import json
 try:
     from pandas_profiling import ProfileReport
     HAS_PROFILING = True
@@ -34,11 +34,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Validação quantitativa parametrizada')
     parser.add_argument('--asset', required=True, help='Nome do ativo (ex: ITUB4_SA)')
     args = parser.parse_args()
-    formatter = json_log_formatter.JSONFormatter()
-    handler = logging.StreamHandler()
-    handler.setFormatter(formatter)
     logger = logging.getLogger("ValidatePipeline")
     logger.handlers = []
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     logger.info(json.dumps({"event": "start_validation", "asset": args.asset}))
