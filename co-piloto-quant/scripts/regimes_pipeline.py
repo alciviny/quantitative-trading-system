@@ -1,6 +1,7 @@
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+DATA_BASE = os.path.join('src', 'co_piloto_quant', 'data')
 import great_expectations as ge
 try:
     from pandas_profiling import ProfileReport
@@ -42,11 +43,11 @@ if __name__ == '__main__':
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     logger.info(json.dumps({"event": "start_regimes", "asset": args.asset}))
-    df = load_parquet(f'data/features/{args.asset}_features.parquet')
+    df = load_parquet(os.path.join(DATA_BASE, 'features', f'{args.asset}_features.parquet'))
     logger.info(json.dumps({"event": "profile_before_regimes", "asset": args.asset, "profile": profile_data(df)}))
     # Profiling antes dos regimes
     if HAS_PROFILING:
-        profiling_dir = Path("data/profiling")
+        profiling_dir = Path(os.path.join(DATA_BASE, "profiling"))
         profiling_dir.mkdir(parents=True, exist_ok=True)
         profile = ProfileReport(df, title=f'Profile {args.asset} - before regimes', minimal=True)
         profile_path = profiling_dir / f"{args.asset}_profile_before_regimes.html"
@@ -59,8 +60,8 @@ if __name__ == '__main__':
     logger.info(json.dumps({"event": "validation_passed", "asset": args.asset, "stage": "before_regimes"}))
     if HAS_PROFILING:
         profile = ProfileReport(df, title=f'Profile {args.asset} - before regimes', minimal=True)
-        profile.to_file(f'data/results_regimes/{args.asset}_profile_before_regimes.html')
-        logging.info(f'Relatório de qualidade salvo em data/results_regimes/{args.asset}_profile_before_regimes.html')
+        profile.to_file(os.path.join(DATA_BASE, 'results_regimes', f'{args.asset}_profile_before_regimes.html'))
+        logging.info(f'Relatório de qualidade salvo em {os.path.join(DATA_BASE, 'results_regimes', f'{args.asset}_profile_before_regimes.html')}')
     features = [
         'realized_volatility',
         # adicione outras features relevantes
@@ -79,7 +80,7 @@ if __name__ == '__main__':
     logger.info(json.dumps({"event": "validation_passed", "asset": args.asset, "stage": "after_regimes"}))
     if HAS_PROFILING:
         profile2 = ProfileReport(df, title=f'Profile {args.asset} - after regimes', minimal=True)
-        profile2.to_file(f'data/results_regimes/{args.asset}_profile_after_regimes.html')
-        logging.info(f'Relatório de qualidade salvo em data/results_regimes/{args.asset}_profile_after_regimes.html')
-    save_parquet(df, f'data/results_regimes/{args.asset}_regimes_hmm.parquet')
-    logger.info(json.dumps({"event": "regimes_saved", "asset": args.asset, "path": f"data/results_regimes/{args.asset}_regimes_hmm.parquet"}))
+        profile2.to_file(os.path.join(DATA_BASE, 'results_regimes', f'{args.asset}_profile_after_regimes.html'))
+        logging.info(f'Relatório de qualidade salvo em {os.path.join(DATA_BASE, 'results_regimes', f'{args.asset}_profile_after_regimes.html')}')
+    save_parquet(df, os.path.join(DATA_BASE, 'results_regimes', f'{args.asset}_regimes_hmm.parquet'))
+    logger.info(json.dumps({"event": "regimes_saved", "asset": args.asset, "path": os.path.join(DATA_BASE, 'results_regimes', f'{args.asset}_regimes_hmm.parquet')}))

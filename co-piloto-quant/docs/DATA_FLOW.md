@@ -92,4 +92,31 @@ graph TD
     3.  Permite que o usuário filtre os ativos (por `score`, `Tendencia Macro`, etc.).
     4.  Ao selecionar um ativo, o script carrega os dados completos do banco de dados, recalcula os indicadores em tempo real e exibe gráficos detalhados para uma análise visual aprofundada.
 
+---
+
+## Padrão de Diretórios de Dados (`src/co_piloto_quant/data/`)
+
+**Todos os scripts do projeto foram padronizados para ler e salvar dados APENAS dentro do diretório:**
+
+```
+src/co_piloto_quant/data/
+```
+
+**Subpastas típicas:**
+- `features/` — Features enriquecidas por ativo
+- `processed/` — Dados processados para modelos
+- `raw/` — Dados brutos (ex: market_data.db)
+- `reports/` — Relatórios, rankings, outputs finais
+- `lab_results/` — Resultados de experimentos e laboratórios
+- `profiling/` — Relatórios de profiling e qualidade
+- `results_regimes/`, `results_validation/`, etc — Outputs de etapas específicas
+
+**Regras obrigatórias:**
+- Nenhum arquivo de dados deve ser salvo na raiz do projeto ou fora de `src/co_piloto_quant/data/`.
+- Todos os scripts de ETL, análise, backtest, validação e visualização já seguem este padrão.
+- Isso garante governança, rastreabilidade, backup e limpeza facilitados.
+
+> **Atenção:**
+> Se criar novos scripts, siga SEMPRE este padrão de caminhos para evitar dispersão de dados e facilitar a manutenção do sistema.
+
 Este design garante um fluxo de trabalho claro: `run_scanner.py` faz o trabalho pesado de processamento em lote, e o dashboard Streamlit foca em fornecer uma experiência de análise de dados rápida e interativa.

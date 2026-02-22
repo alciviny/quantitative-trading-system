@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger('WFA')
 
 DATA_DIR = Path('src/co_piloto_quant/data/ml_ready')
-OUT_DIR = Path('reports/wfa_strategy')
+OUT_DIR = Path('src/co_piloto_quant/data/reports/wfa_strategy')
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Custos Reais

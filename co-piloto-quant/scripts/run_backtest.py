@@ -23,8 +23,8 @@ VOL_MAX_RANGE = np.arange(0.8, 2.5, 0.15)  # regime-aware ratio
 BB_EXIT_STD_DEV = 2.0
 INITIAL_CAPITAL = 100000
 FEES_PCT = 0.0006
-OUTPUT_DIR = "data/reports"
-DEEP_LOG_DIR = "data/strategy_logs"
+OUTPUT_DIR = "src/co_piloto_quant/data/reports"
+DEEP_LOG_DIR = "src/co_piloto_quant/data/strategy_logs"
 
 
 logging.basicConfig(level=logging.INFO,

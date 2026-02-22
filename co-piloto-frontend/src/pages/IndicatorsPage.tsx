@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { ValidIndicatorsTable, ValidIndicatorAsset } from '@/components/indicators/ValidIndicatorsTable'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { apiService } from '@/services/api'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -21,6 +22,9 @@ interface IndicatorData {
 }
 
 export function IndicatorsPage() {
+    // Indicadores obrigatórios para exibição
+    const requiredIndicators = ['hurst_exponent', 'market_entropy', 'fractal_dimension']
+
   const [stocks, setStocks] = useState<string[]>([])
   const [selectedStock, setSelectedStock] = useState<string>('')
   const [days, setDays] = useState<number>(90)
@@ -125,6 +129,30 @@ export function IndicatorsPage() {
 
   return (
     <div className="container mx-auto p-6 space-y-6">
+      {/* Tabela de ativos completos com indicadores obrigatórios */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Ativos com Indicadores Completos</CardTitle>
+          <CardDescription>Somente ativos com fechamento e todos os indicadores obrigatórios</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ValidIndicatorsTable
+            assets={
+              data.length > 0
+                ? [{
+                    ticker: selectedStock,
+                    close: (data[data.length-1]?.close) ?? 0,
+                    indicators: requiredIndicators.reduce((acc, ind) => {
+                      acc[ind] = data[data.length-1]?.[ind]
+                      return acc
+                    }, {} as Record<string, number>)
+                  }]
+                : []
+            }
+            requiredIndicators={requiredIndicators}
+          />
+        </CardContent>
+      </Card>
       {/* Header com Status */}
       <div className="flex items-center justify-between">
         <div>

@@ -52,7 +52,7 @@ def main():
     parser.add_argument(
         "--input-file",
         type=Path,
-        default=Path("momentum_all_regimes_results.csv"),
+        default=Path("src/co_piloto_quant/data/momentum_all_regimes_results.csv"),
         help="Caminho para o arquivo CSV com os resultados do backtest. Deve conter uma coluna 'return'."
     )
     parser.add_argument(
@@ -87,15 +87,15 @@ def main():
     # O script está em co-piloto-quant/scripts, então o input file default está um nível acima
     input_file_path = args.input_file
     if not input_file_path.is_absolute():
-        # Assumindo que o arquivo de input está na raiz do 'co-piloto-quant'
-        input_file_path = Path(__file__).resolve().parents[1] / args.input_file
+        # Assumindo que o arquivo de input está em src/co_piloto_quant/data/
+        input_file_path = Path(__file__).resolve().parents[1] / "src/co_piloto_quant/data" / args.input_file.name
 
     if not input_file_path.exists():
         logging.error(f"Arquivo de entrada não encontrado: {input_file_path}")
         sys.exit(1)
         
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = Path(__file__).resolve().parents[1] / args.output_dir / "monte_carlo_results.csv"
+    output_file = Path(__file__).resolve().parents[1] / "src/co_piloto_quant/data/reports" / "monte_carlo_results.csv"
 
     # --- Carregamento e Preparação dos Dados ---
     logging.info(f"Carregando resultados do backtest de: {input_file_path}")

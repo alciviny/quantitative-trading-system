@@ -167,8 +167,8 @@ def build_regime_report(tickers: list[str]) -> pd.DataFrame:
     report_df = pd.concat(results, ignore_index=True)
     report_df.set_index("ticker", inplace=True)
     
-    os.makedirs('data/reports', exist_ok=True)
-    report_path = "data/reports/market_regime_report.csv"
+    os.makedirs('src/co_piloto_quant/data/reports', exist_ok=True)
+    report_path = "src/co_piloto_quant/data/reports/market_regime_report.csv"
     report_df.to_csv(report_path)
     
     print(f"\n✅ Relatório de regime de mercado salvo em: {report_path}")
