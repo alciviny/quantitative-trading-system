@@ -20,6 +20,19 @@ build/
 # Dados gerados
 src/co_piloto_quant/data/raw/
 src/co_piloto_quant/data/processed/
+# Resultados e outputs de scripts (não versionar)
+src/co_piloto_quant/data/results/*.csv
+src/co_piloto_quant/data/results/*.png
+src/co_piloto_quant/data/results/*.jpg
+src/co_piloto_quant/data/results/*.jpeg
+src/co_piloto_quant/data/results/*.parquet
+docs/validacao_energy/**/*.csv
+docs/validacao_energy/**/*.png
+docs/validacao_energy/**/*.jpg
+docs/validacao_energy/**/*.jpeg
+docs/validacao_energy/**/*.parquet
+docs/validacao_energy/**/metricas_*.csv
+docs/validacao_energy/**/README_ACHADOS_MULTIVARIADO.md
 
 # Banco de dados
 *.db
