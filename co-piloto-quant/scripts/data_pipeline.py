@@ -40,6 +40,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from src.co_piloto_quant.data.data_manager import data_manager
 from src.co_piloto_quant.data.indicator_engine import IndicatorEngine
+from src.co_piloto_quant.config import (
+    BB_PERIOD, PRICE_BB_DEVIATIONS, IFR_PERIOD, SYSTEM_PERIOD, SYSTEM_DEVIATIONS,
+    STOCH_K_PERIOD, STOCH_K_SMOOTH, STOCH_D_SMOOTH, HURST_WINDOW, ENTROPY_WINDOW
+)
 from src.co_piloto_quant.universe import get_expanded_universe
 
 
@@ -99,83 +103,84 @@ def calculate_all_features(df: pd.DataFrame, ticker: str) -> Optional[pd.DataFra
         engine = IndicatorEngine(df)
         
         # --- Indicadores Especiais (Microestrutura) ---
+
         try:
-            engine.add_indicator('entropy', window=20)
+            engine.add_indicator('entropy', window=ENTROPY_WINDOW)
             logger.debug(f"{ticker}: ✓ Entropy calculado")
         except Exception as e:
             logger.warning(f"{ticker}: Erro ao calcular entropy - {e}")
-        
+
         try:
-            engine.add_indicator('hurst', window=72, kind='returns')
+            engine.add_indicator('hurst', window=HURST_WINDOW, kind='returns')
             logger.debug(f"{ticker}: ✓ Hurst calculado")
         except Exception as e:
             logger.warning(f"{ticker}: Erro ao calcular hurst - {e}")
-        
+
         try:
             engine.add_indicator('half_life', window=60)
             logger.debug(f"{ticker}: ✓ Half-Life calculado")
         except Exception as e:
             logger.warning(f"{ticker}: Erro ao calcular half_life - {e}")
-        
+
         # --- Volatilidade ---
         try:
             engine.add_indicator('volatility', period=21)
             logger.debug(f"{ticker}: ✓ Volatility calculado")
         except Exception as e:
             logger.warning(f"{ticker}: Erro ao calcular volatility - {e}")
-        
+
         # --- Bollinger Bands ---
         try:
-            engine.add_indicator('bollinger_bands', period=20, std_devs=[2.0, 3.0])
+            engine.add_indicator('bollinger_bands', period=BB_PERIOD, std_devs=PRICE_BB_DEVIATIONS)
             logger.debug(f"{ticker}: ✓ Bollinger Bands calculado")
         except Exception as e:
             logger.warning(f"{ticker}: Erro ao calcular bollinger_bands - {e}")
-        
+
         # --- IFR (RSI) ---
         try:
-            engine.add_indicator('ifr', period=14)
+            engine.add_indicator('ifr', period=IFR_PERIOD)
             logger.debug(f"{ticker}: ✓ IFR/RSI calculado")
         except Exception as e:
             logger.warning(f"{ticker}: Erro ao calcular ifr - {e}")
-        
+
         # --- WWMA (Welles Wilder Moving Average) ---
         try:
-            engine.add_indicator('ww_ma', period=14)
+            engine.add_indicator('ww_ma', period=IFR_PERIOD)
             logger.debug(f"{ticker}: ✓ WWMA calculado")
         except Exception as e:
             logger.warning(f"{ticker}: Erro ao calcular ww_ma - {e}")
-        
+
         # --- Stochastic ---
         try:
-            engine.add_indicator('stochastic', k_period=14, k_smooth=3, d_smooth=3)
+            engine.add_indicator('stochastic', k_period=STOCH_K_PERIOD, k_smooth=STOCH_K_SMOOTH, d_smooth=STOCH_D_SMOOTH)
             logger.debug(f"{ticker}: ✓ Stochastic calculado")
         except Exception as e:
             logger.warning(f"{ticker}: Erro ao calcular stochastic - {e}")
-        
+
         # --- System TPM ---
         try:
-            engine.add_indicator('system_tpm', period=14)
+            engine.add_indicator('system_tpm', period=SYSTEM_PERIOD, deviations=SYSTEM_DEVIATIONS)
             logger.debug(f"{ticker}: ✓ System TPM calculado")
         except Exception as e:
             logger.warning(f"{ticker}: Erro ao calcular system_tpm - {e}")
-        
+
         # --- Ehlers Hilbert Sinewave ---
         try:
             engine.add_indicator('ehlers_hilbert')
             logger.debug(f"{ticker}: ✓ Ehlers Hilbert calculado")
         except Exception as e:
             logger.warning(f"{ticker}: Erro ao calcular ehlers_hilbert - {e}")
-        
+
         # NOTA: Choppiness Index removido (requer pandas-ta não instalado)
-        
+
         # Retorna DataFrame enriquecido
         df_enriched = engine.get_data()
-        
+
         # Remove colunas duplicadas (mantém primeira ocorrência)
         df_enriched = df_enriched.loc[:, ~df_enriched.columns.duplicated()]
-        
+
         logger.info(f"{ticker}: ✅ {len(df_enriched.columns)} colunas totais ({len(df_enriched)} linhas)")
-        
+
         return df_enriched
         
     except Exception as e:
