@@ -1,7 +1,19 @@
+
+
 import pandas as pd
 import numpy as np
 import logging
 from typing import Dict, Callable, Any
+from co_piloto_quant.indicators.special.path_elasticity import path_elasticity_index
+from co_piloto_quant.indicators.special.directional_entropy import directional_entropy
+
+def _path_elasticity_wrapper(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    """Wrapper para path_elasticity_index que espera uma Série."""
+    return path_elasticity_index(data['close'], **kwargs)
+
+def _directional_entropy_wrapper(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    """Wrapper para directional_entropy que espera uma Série."""
+    return directional_entropy(data['close'], **kwargs)
 
 # Imports dos indicadores - usando biblioteca 'ta' para análise técnica
 import ta as ta_lib
@@ -22,7 +34,7 @@ from co_piloto_quant.indicators.names import IndicatorNames
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Funções de Indicadores Faltantes e Wrappers ---
+# --- Funções de Indicadores  e Wrappers ---
 
 def calculate_volatility(data: pd.DataFrame, period: int = 21) -> pd.DataFrame:
     """Calcula a volatilidade como o desvio padrão móvel dos log-retornos."""
@@ -78,7 +90,9 @@ class IndicatorEngine:
         'stochastic': calculate_stochastic_custom,
         'hurst': _hurst_wrapper,
         'entropy': _entropy_wrapper,
+        'directional_entropy': _directional_entropy_wrapper,
         'volatility': calculate_volatility,
+        'path_elasticity': _path_elasticity_wrapper,
         'half_life': _halflife_wrapper,
         'ehlers_hilbert': _ehlers_wrapper,
         'choppiness': _chop_wrapper,
