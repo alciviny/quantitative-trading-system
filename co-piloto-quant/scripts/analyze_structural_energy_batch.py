@@ -1,8 +1,22 @@
+from scipy.stats import median_abs_deviation
+
 import os
 import glob
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import datetime
+
+# Logging simples
+# Logging simples
+def log(msg):
+    print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+
+# Z-score robusto
+def robust_zscore(series, window):
+    median = series.rolling(window).median()
+    mad = series.rolling(window).apply(median_abs_deviation)
+    return (series - median) / (mad + 1e-8)
 
 def rolling_zscore(series, window):
     mean = series.rolling(window).mean()
@@ -13,31 +27,35 @@ def rolling_zscore(series, window):
 def preditive_metrics(energy_col, fatores, n=5):
     fatores['transicao'] = fatores['regime_rolling'].diff().ne(0).astype(int)
     energias_antes = []
-    for idx in fatores.index[n:]:
-        if fatores.loc[idx, 'transicao'] == 1:
-            energias_antes.append(fatores.loc[idx-n:idx-1, energy_col].mean())
+    for i in range(n, len(fatores)):
+        if fatores.iloc[i]['transicao'] == 1:
+            energias_antes.append(fatores.iloc[i-n:i][energy_col].mean())
     energia_dia_troca = fatores.loc[fatores['transicao']==1, energy_col].mean()
     energia_geral = fatores[energy_col].mean()
     top20 = fatores[energy_col] >= fatores[energy_col].quantile(0.8)
     prob_troca_top20 = fatores.loc[top20, 'transicao'].mean()*100
-    prob_troca_geral = fatores['transicao'].mean()*100
+    prob_geral = fatores['transicao'].mean()*100  # Mantido para retorno, pois é usado no dict
     return {
         'energia_antes': np.nanmean(energias_antes),
         'energia_dia_troca': energia_dia_troca,
         'energia_geral': energia_geral,
         'prob_top20': prob_troca_top20,
-        'prob_geral': prob_troca_geral
+        'prob_geral': prob_geral
     }
 
 # Diretório dos fatores estruturais
+
 factors_dir = 'co-piloto-quant/src/co_piloto_quant/data/results'
 files = glob.glob(os.path.join(factors_dir, 'structural_factors_*.csv'))
 ativos = [os.path.basename(f).replace('structural_factors_','').replace('.csv','') for f in files]
+log(f'Encontrados {len(files)} arquivos de fatores estruturais.')
 
 resultados = []
 for ativo, path in zip(ativos, files):
     try:
+        log(f'Processando ativo: {ativo}')
         fatores = pd.read_csv(path, index_col=0)
+        log('Arquivo de fatores lido com sucesso.')
         # Parâmetros
         window_compressao = 21
         window_instab = 21
@@ -53,6 +71,7 @@ for ativo, path in zip(ativos, files):
         fatores['compressao_z'] = rolling_zscore(fatores['compressao'], window_zscore_robusto)
         fatores['instabilidade_z'] = rolling_zscore(fatores['instabilidade'], window_zscore_robusto)
         fatores['energia_estrutural'] = fatores['compressao_z'] + fatores['instabilidade_z']
+        log('Energia v0.1 calculada.')
         # Entropia/dispersão dos fatores
         fatores['fatores_entropy'] = fatores[['fator_persistencia','fator_estrutura','fator_expansao','fator_liquidez']].rolling(window_entropy).std().mean(axis=1)
         # Energia v0.2
@@ -62,6 +81,7 @@ for ativo, path in zip(ativos, files):
         fatores_v = fatores_v.loc[centroides.index]
         fatores['energia_v2'] = np.sqrt(((fatores_v - centroides)**2).sum(axis=1))
         fatores['energia_v2_roll'] = fatores['energia_v2'].rolling(window_v2).mean()
+        log('Energia v0.2 calculada.')
         # Energia v0.3
         fatores['energia_v3'] = (
             fatores['energia_estrutural'] +
@@ -69,6 +89,15 @@ for ativo, path in zip(ativos, files):
             fatores['fatores_entropy']
         )
         fatores['energia_v3_roll'] = fatores['energia_v3'].rolling(window_v3).mean()
+        # Energia v0.4 — combinação não-linear e robusta
+        fatores['energia_v4'] = (
+            robust_zscore(fatores['energia_estrutural'], window_zscore_robusto) *
+            robust_zscore(fatores['energia_v2'], window_zscore_robusto) +
+            robust_zscore(fatores['fatores_entropy'], window_zscore_robusto)
+        )
+        fatores['energia_v4_roll'] = fatores['energia_v4'].rolling(window_v3).mean()
+        log('Energia v0.4 calculada.')
+        log('Energia v0.3 calculada.')
         # Métricas preditivas
         met_v1 = preditive_metrics('energia_estrutural', fatores)
         met_v2 = preditive_metrics('energia_v2_roll', fatores)
@@ -82,23 +111,26 @@ for ativo, path in zip(ativos, files):
         # Salvar CSV de energia para cada ativo
         energy_cols = [
             'date' if 'date' in fatores.columns else None,
-            'compressao','instabilidade','energia_estrutural','energia_v2','energia_v2_roll','fatores_entropy','energia_v3','energia_v3_roll','regime_rolling','ret_futuro_10','close'
+            'compressao','instabilidade','energia_estrutural','energia_v2','energia_v2_roll','fatores_entropy','energia_v3','energia_v3_roll','energia_v4','energia_v4_roll','regime_rolling','ret_futuro_10','close'
         ]
         # Filtra apenas colunas existentes
         energy_cols = [col for col in energy_cols if col and col in fatores.columns]
         fatores[energy_cols].to_csv(f'co-piloto-quant/src/co_piloto_quant/data/results/structural_energy_{ativo}.csv', index=False)
+        log(f'Arquivo de energia salvo para {ativo}.')
         # Gráfico comparativo
         plt.figure(figsize=(12,6))
         fatores['energia_estrutural'].plot(label='Energia v0.1')
         fatores['energia_v2_roll'].plot(label='Energia v0.2 (rolling)')
         fatores['energia_v3_roll'].plot(label='Energia v0.3 (combinada rolling)')
+        fatores['energia_v4_roll'].plot(label='Energia v0.4 (robusta, não-linear)', linestyle='--')
         plt.title(f'Comparativo Energias — {ativo}')
         plt.legend()
         plt.grid(True)
         plt.savefig(f'co-piloto-quant/src/co_piloto_quant/data/results/energy_comparative_{ativo}.png')
         plt.close()
+        log(f'Gráfico comparativo salvo para {ativo}.')
     except Exception as e:
-        print(f'Erro ao processar {ativo}: {e}')
+        log(f'Erro ao processar {ativo}: {e}')
 
 # Relatório final
 report_rows = []
@@ -117,5 +149,5 @@ for r in resultados:
 
 df_report = pd.DataFrame(report_rows)
 df_report.to_csv('co-piloto-quant/src/co_piloto_quant/data/results/energy_comparative_report.csv', index=False)
-print('Relatório comparativo salvo em energy_comparative_report.csv')
-print(df_report)
+log('Relatório comparativo salvo em energy_comparative_report.csv')
+log(df_report)

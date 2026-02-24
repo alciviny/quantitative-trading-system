@@ -6,13 +6,11 @@ from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_sco
 import matplotlib.pyplot as plt
 
 
-import argparse
 
+import argparse
 # Argumentos de linha de comando
 parser = argparse.ArgumentParser(description='Validação quantitativa dos sinais de energy.')
-
-parser.add_argument('--ativos', nargs='+', default=['BPAC11.SA', 'ELET6.SA', 'AXIA6.SA'], help='Lista de ativos')
-parser.add_argument('--versoes', nargs='+', default=['v0.1', 'v0.2', 'v0.3'], help='Versões de energy')
+parser.add_argument('--versoes', nargs='+', default=['v0.1', 'v0.2', 'v0.3', 'v0.4'], help='Versões de energy')
 parser.add_argument('--quantil', type=float, default=0.8, help='Quantil para sinal de energy (ex: 0.8 para top 20%)')
 parser.add_argument('--horizonte', type=int, default=1, help='Horizonte de previsão (dias à frente para troca de regime)')
 parser.add_argument('--output', default='co-piloto-quant/docs/validacao_energy/metricas_quantitativas.csv', help='Arquivo de saída das métricas')
@@ -20,11 +18,13 @@ parser.add_argument('--plots', default='co-piloto-quant/docs/validacao_energy/',
 parser.add_argument('--janela', type=int, default=None, help='Tamanho da janela rolling para recalcular energias (opcional)')
 args = parser.parse_args()
 
-ATIVOS = args.ativos
+import glob
+RESULTS_PATH = 'co-piloto-quant/src/co_piloto_quant/data/results/'
+energy_files = glob.glob(os.path.join(RESULTS_PATH, 'structural_energy_*.csv'))
+ATIVOS = [os.path.basename(f).replace('structural_energy_','').replace('.csv','') for f in energy_files]
 VERSOES = args.versoes
 QUANTIL = args.quantil
 HORIZONTE = args.horizonte
-RESULTS_PATH = 'co-piloto-quant/src/co_piloto_quant/data/results/'
 OUTPUT_METRICAS = args.output
 OUTPUT_PLOTS = args.plots
 
@@ -118,6 +118,8 @@ for ativo in ATIVOS:
             energy_col = 'energia_v2_roll'
         elif versao == 'v0.3':
             energy_col = 'energia_v3_roll'
+        elif versao == 'v0.4':
+            energy_col = 'energia_v4_roll'
         else:
             energy_col = f'energia_{versao}'
         if energy_col not in df.columns or 'ret_futuro_10' not in df.columns or 'regime_rolling' not in df.columns:

@@ -26,6 +26,8 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         # Indicadores avançados
         ('hurst', {'window': HURST_WINDOW, 'kind': 'returns'}),
         ('entropy', {'window': ENTROPY_WINDOW}),
+        ('directional_entropy', {'window': 21}),
+        ('path_elasticity', {'window': 21}),
         ('volatility', {'period': 21}),  # Valor fixo, pode ser centralizado se desejar
         ('half_life', {'window': 60}),   # Valor fixo, pode ser centralizado se desejar
         ('ehlers_hilbert', {}),
