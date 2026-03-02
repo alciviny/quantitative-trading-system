@@ -1,3 +1,21 @@
+# Ignorar imagens e outputs de relatórios
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.pdf
+*.csv
+*.xlsx
+energy_results/
+co-piloto-quant/src/co_piloto_quant/data/results/
+# Ignorar arquivos temporários e de log
+*.log
+*.tmp
+*.bak
+__pycache__/
+.vscode/
+*.ipynb_checkpoints/
 # Ambientes Virtuais Python
 vbt_env/
 env/
