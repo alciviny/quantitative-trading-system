@@ -184,3 +184,12 @@ class IndicatorEngine:
 
     def get_data(self) -> pd.DataFrame:
         return self.data
+
+    def add_volatility_derivatives(self):
+        # Gera vol_z, vol_of_vol, vol_of_vol_z se volatility_21 existir
+        if 'volatility_21' in self.data.columns:
+            vol = self.data['volatility_21']
+            self.data['vol_z'] = (vol - vol.rolling(63).mean()) / (vol.rolling(63).std() + 1e-8)
+            self.data['vol_of_vol'] = vol.rolling(21).std()
+            vov = self.data['vol_of_vol']
+            self.data['vol_of_vol_z'] = (vov - vov.rolling(63).mean()) / (vov.rolling(63).std() + 1e-8)

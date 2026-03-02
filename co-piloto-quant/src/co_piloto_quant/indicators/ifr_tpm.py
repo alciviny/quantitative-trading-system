@@ -36,7 +36,8 @@ def calculate_ifr_tpm(data: pd.DataFrame, column: str = 'close', period: int = 1
     
     # Cria o DataFrame de resultado a partir da série (que agora garantidamente tem um índice)
     result_df = pd.DataFrame(ifr_series)
-    result_df['IFR_50'] = 50 # Mantido para fins de visualização/compatibilidade
+    # Corrige para usar o valor real do IFR calculado
+    result_df['IFR_50'] = result_df[column_name]
 
     # --- CORREÇÃO DE ROBUSTEZ 3: Reindexação ---
     # Garante que o output tenha o mesmo índice que o input original, preenchendo NaNs onde necessário
