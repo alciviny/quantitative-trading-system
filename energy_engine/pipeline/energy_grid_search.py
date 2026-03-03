@@ -20,7 +20,15 @@ def main(
 	if horizontes is None:
 		horizontes = [1, 5, 10, 20]
 	if ativos is None:
-		ativos = ['BPAC11.SA', 'ELET6.SA', 'AXIA6.SA']
+		# Busca todos os arquivos de fatores estruturais no diretório padrão
+		factors_dir = 'co-piloto-quant/src/co_piloto_quant/data/results'
+		ativos = []
+		for fname in os.listdir(factors_dir):
+			if fname.startswith('structural_factors_') and fname.endswith('.csv'):
+				ticker = fname.replace('structural_factors_','').replace('.csv','')
+				ativos.append(ticker)
+		if not ativos:
+			ativos = ['BPAC11.SA', 'ELET6.SA', 'AXIA6.SA']  # fallback
 	if versoes is None:
 		versoes = ['v0.1', 'v0.2', 'v0.3']
 	if output_dir is None:
@@ -33,7 +41,6 @@ def main(
 		output_csv = os.path.join(output_dir, f'metricas_q{int(quantil*100)}_h{horizonte}.csv')
 		cmd = [
 			'python', validation_script,
-			'--ativos', *ativos,
 			'--versoes', *versoes,
 			'--quantil', str(quantil),
 			'--horizonte', str(horizonte),

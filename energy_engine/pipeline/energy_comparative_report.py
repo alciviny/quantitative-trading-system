@@ -9,7 +9,15 @@ from energy_engine.features.metrics import preditive_metrics
 
 def main(ativos=None, factors_dir=None, results_dir=None, plot=True):
 	if ativos is None:
-		ativos = ['ITUB4.SA', 'VALE3.SA', 'PETR4.SA']
+		# Busca todos os arquivos de fatores disponíveis no diretório
+		ativos = []
+		for fname in os.listdir(factors_dir):
+			if fname.startswith('structural_factors_') and fname.endswith('.csv'):
+				ticker = fname.replace('structural_factors_','').replace('.csv','')
+				ativos.append(ticker)
+		if not ativos:
+			print('Nenhum ativo encontrado no diretório de fatores.')
+			return
 	if factors_dir is None:
 		factors_dir = os.path.join(os.path.dirname(__file__), '../../co-piloto-quant/src/co_piloto_quant/data/results')
 	if results_dir is None:

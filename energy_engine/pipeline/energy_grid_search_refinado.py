@@ -36,7 +36,6 @@ def main(
 		output_csv = os.path.join(output_dir, f'metricas_q{int(quantil*100)}_h{horizonte}_w{janela}.csv')
 		cmd = [
 			'python', validation_script,
-			'--ativos', *ativos,
 			'--versoes', *versoes,
 			'--quantil', str(quantil),
 			'--horizonte', str(horizonte),
