@@ -55,8 +55,13 @@ def fetch_data(
                 period=period,
                 interval=interval,
                 progress=False,
-                auto_adjust=True,  # Geralmente recomendado para obter preços ajustados
+                auto_adjust=True,  # Preço de 'close' já ajustado (yfinance >=0.2.36)
             )
+
+        # Garantia: se auto_adjust=True, o campo 'close' já é ajustado por splits/dividendos.
+        # Se por algum motivo vier 'adjclose', priorize ele como 'close'.
+        if 'adjclose' in data.columns:
+            data['close'] = data['adjclose']
 
         # Normalização: se MultiIndex, pega apenas o nível 0 (colunas simples)
         if isinstance(data.columns, pd.MultiIndex):
@@ -71,6 +76,9 @@ def fetch_data(
         cols = [c for c in ohlcv if c in data.columns]
         if cols:
             data = data[cols]
+
+        # LOG: Mostra se o close é ajustado
+        logger.info(f"[DEBUG FETCH] {ticker} campo 'close' é ajustado por splits/dividendos (auto_adjust=True). Se adjclose existir, foi priorizado.")
 
         # LOG DETALHADO PARA DEBUG
         logger.info(f"[DEBUG FETCH] {ticker} baixado: shape={data.shape}, columns={list(data.columns)}")
