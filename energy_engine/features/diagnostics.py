@@ -2,9 +2,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 def diagnostico_regimes(energy, factors, ticker='TICKER', plot=True):
-    # Alinhar índices
-    energy = energy.loc[factors.index]
-    factors = factors.loc[energy.index]
+    # Alinhar pelo campo 'date'
+    if 'date' in energy.columns:
+        energy = energy.set_index('date')
+    if 'date' in factors.columns:
+        factors = factors.set_index('date')
+    # Interseção dos índices
+    idx_comum = energy.index.intersection(factors.index)
+    energy = energy.loc[idx_comum]
+    factors = factors.loc[idx_comum]
     regime = factors['regime_rolling'].fillna(method='ffill')
     energy['transicao'] = regime.diff().ne(0).astype(int)
     n_transicoes = energy['transicao'].sum()
@@ -22,11 +28,14 @@ def diagnostico_regimes(energy, factors, ticker='TICKER', plot=True):
     energias_antes = []
     energias_no_dia = []
     energias_depois = []
-    for idx in energy.index[N:-N]:
+    idx_list = list(energy.index)
+    for i in range(N, len(energy)-N):
+        idx = idx_list[i]
         if energy.loc[idx, 'transicao'] == 1:
-            energias_antes.append(energy.loc[idx-N:idx-1, 'energia_estrutural'].mean())
-            energias_no_dia.append(energy.loc[idx, 'energia_estrutural'])
-            energias_depois.append(energy.loc[idx+1:idx+N, 'energia_estrutural'].mean())
+            # médias usando posições
+            energias_antes.append(energy.iloc[i-N:i, energy.columns.get_loc('energia_estrutural')].mean())
+            energias_no_dia.append(energy.iloc[i, energy.columns.get_loc('energia_estrutural')])
+            energias_depois.append(energy.iloc[i+1:i+1+N, energy.columns.get_loc('energia_estrutural')].mean())
     print(f'Energia média 5 dias antes da troca: {np.nanmean(energias_antes):.4f}')
     print(f'Energia média no dia da troca: {np.nanmean(energias_no_dia):.4f}')
     print(f'Energia média 5 dias depois da troca: {np.nanmean(energias_depois):.4f}')

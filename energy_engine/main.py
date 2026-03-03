@@ -54,7 +54,7 @@ def main():
     parser = argparse.ArgumentParser(description='Orquestrador universal energy_engine')
     parser.add_argument('--step', type=str, default='all', choices=['all','leitura','calculo','validacao','diagnostico','exportacao','gridsearch','batch','relatorio'], help='Etapa do pipeline')
     parser.add_argument('--ativos', nargs='+', help='Lista de ativos')
-    parser.add_argument('--factors_dir', type=str, help='Diretório dos fatores estruturais')
+    parser.add_argument('--factors_dir', type=str, default='co-piloto-quant/src/co_piloto_quant/data/results', help='Diretório dos fatores estruturais (padrão: co-piloto-quant/src/co_piloto_quant/data/results)')
     parser.add_argument('--output_dir', type=str, default='./energy_results', help='Diretório de saída dos resultados')
     parser.add_argument('--quantis', nargs='+', type=float, default=[0.7,0.8,0.9], help='Quantis para grid search')
     parser.add_argument('--horizontes', nargs='+', type=int, default=[1,5,10,20], help='Horizontes para grid search')
