@@ -1,0 +1,57 @@
+{
+  "ativo": "BBDC4.SA",
+  "acuracia": 0.8902857142857142,
+  "f1_macro": 0.3139862958484482,
+  "f1_weighted": 0.838612541026084,
+  "support": 875,
+  "relatorio": {
+    "BUY": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1-score": 0.0,
+      "support": 86.0
+    },
+    "HOLD": {
+      "precision": 0.8902857142857142,
+      "recall": 1.0,
+      "f1-score": 0.9419588875453446,
+      "support": 779.0
+    },
+    "SELL": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1-score": 0.0,
+      "support": 10.0
+    },
+    "accuracy": 0.8902857142857142,
+    "macro avg": {
+      "precision": 0.2967619047619047,
+      "recall": 0.3333333333333333,
+      "f1-score": 0.3139862958484482,
+      "support": 875.0
+    },
+    "weighted avg": {
+      "precision": 0.7926086530612244,
+      "recall": 0.8902857142857142,
+      "f1-score": 0.838612541026084,
+      "support": 875.0
+    }
+  },
+  "matriz_confusao": [
+    [
+      0,
+      86,
+      0
+    ],
+    [
+      0,
+      779,
+      0
+    ],
+    [
+      0,
+      10,
+      0
+    ]
+  ]
+}
