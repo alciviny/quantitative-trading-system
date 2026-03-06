@@ -7,6 +7,8 @@ __pycache__/
 env/
 venv/
 .venv/
+Lib/
+Lib64/
 
 # Arquivos de IDE
 .vscode/

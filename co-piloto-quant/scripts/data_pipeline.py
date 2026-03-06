@@ -339,76 +339,98 @@ def run_pipeline(tickers: Optional[List[str]] = None, force_update: bool = False
     
     # Passo 2: Processa cada um
     logger.info("⚡ FASE 2/2: Feature Engineering + Persistência...")
+    # Determina lista de tickers
+    if tickers:
+        ticker_list = tickers
+        logger.info(f"\U0001f4ca Modo: Ativos específicos ({len(ticker_list)} tickers)")
+    else:
+        ticker_list = get_expanded_universe()
+        logger.info(f"\U0001f4ca Modo: Universo completo ({len(ticker_list)} tickers)")
+
+
+    # Filtra apenas ativos brasileiros (.SA)
+    br_ticker_list = [t for t in ticker_list if isinstance(t, str) and t.upper().endswith('.SA')]
+    logger.info(f"Universo filtrado para ativos brasileiros: {len(br_ticker_list)} ativos (.SA)")
+    if not br_ticker_list:
+        logger.error("Nenhum ativo brasileiro (.SA) encontrado. Abortando pipeline.")
+        return []
+
+    if force_update:
+        logger.info("\u26a0\ufe0f  Force Update: ON (ignorando cache)")
+
+    logger.info("")
+    logger.info("="*80)
+
+    # Passo 1: Busca em lote (com cache)
+    logger.info("\u26a1 FASE 1/2: Download/Cache em lote...")
+    try:
+        all_data = data_manager.get_data_batch(br_ticker_list)
+    except Exception as e:
+        logger.error(f"Erro ao baixar dados em batch: {e}", exc_info=True)
+        return []
+
+
+    valid_data = {t: df for t, df in all_data.items() if df is not None and not df.empty}
+    logger.info(f"\u2713 {len(valid_data)}/{len(br_ticker_list)} ativos com dados válidos")
+    logger.info("")
+
+    if not valid_data:
+        logger.error("Nenhum ativo com dados válidos foi baixado. Pipeline encerrado sem cálculo de features.")
+        return []
+
+    # Passo 2: Processa cada um
+    logger.info("\u26a1 FASE 2/2: Feature Engineering + Persistência...")
     results = []
-    
+
     with tqdm(total=len(valid_data), desc="Pipeline", unit="ticker") as pbar:
         for ticker in valid_data.keys():
-            result = process_single_ticker(ticker, force_update)
-            results.append(result)
+            try:
+                logger.info(f"Iniciando processamento do ticker: {ticker}")
+                result = process_single_ticker(ticker, force_update)
+                logger.info(f"Resultado do processamento de {ticker}: {result}")
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Erro inesperado ao processar {ticker}: {e}")
             pbar.update(1)
-    
+
     # Resumo final
     logger.info("")
     logger.info("="*80)
-    logger.info("📊 RESUMO DA EXECUÇÃO")
+    logger.info("\U0001f4ca RESUMO DA EXECUÇÃO")
     logger.info("="*80)
-    
+
     success = [r for r in results if r['status'] == 'success']
     no_data = [r for r in results if r['status'] == 'no_data']
     insufficient = [r for r in results if r['status'] == 'insufficient_data']
     errors = [r for r in results if r['status'] == 'error']
-    
-    logger.info(f"✅ Processados com sucesso: {len(success)}/{len(ticker_list)}")
-    logger.info(f"⚠️  Sem dados suficientes: {len(no_data) + len(insufficient)}")
-    logger.info(f"❌ Erros: {len(errors)}")
-    
+
+    logger.info(f"\u2705 Processados com sucesso: {len(success)}/{len(br_ticker_list)}")
+    logger.info(f"\u26a0\ufe0f  Sem dados suficientes: {len(no_data) + len(insufficient)}")
+    logger.info(f"\u274c Erros: {len(errors)}")
+
     if success:
         total_rows = sum(r['rows'] for r in success)
-        logger.info(f"📈 Total de linhas processadas: {total_rows:,}")
-    
+        logger.info(f"\U0001f4c8 Total de linhas processadas: {total_rows:,}")
+
     logger.info("")
-    logger.info("📦 Persistência:")
-    logger.info("   📊 Dados brutos (OHLCV): src/co_piloto_quant/data/raw/market_data.db")
-    logger.info("   🎯 Features computadas: src/co_piloto_quant/data/features/*_enriched.parquet")
+    logger.info("\U0001f4e6 Persistência:")
+    logger.info("   \U0001f4ca Dados brutos (OHLCV): src/co_piloto_quant/data/raw/market_data.db")
+    logger.info("   \U0001f3af Features computadas: src/co_piloto_quant/data/features/*_enriched.parquet")
     logger.info("")
-    
+
     if errors:
-        logger.warning("❌ Ativos com erro:")
+        logger.warning("\u274c Ativos com erro:")
         for r in errors[:10]:  # Mostra apenas os 10 primeiros
             logger.warning(f"   - {r['ticker']}: {r.get('error', 'Erro desconhecido')}")
         if len(errors) > 10:
             logger.warning(f"   ... e mais {len(errors) - 10} erros")
         logger.info("")
-    
+
     logger.info("="*80)
-    logger.info("✅ Pipeline concluído!")
+    logger.info("\u2705 Pipeline concluído!")
     logger.info("="*80)
-    
+
     return results
-
-
-# ============================================================================
-# CLI
-# ============================================================================
-
-def main():
-    """Função principal - interface CLI"""
-    parser = argparse.ArgumentParser(
-        description='Data Pipeline - Co-Piloto Quant',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Exemplos de uso:
-  python scripts/data_pipeline.py                              # Todos os ativos
-  python scripts/data_pipeline.py --tickers PETR4.SA VALE3.SA  # Específicos
-  python scripts/data_pipeline.py --force-update               # Força re-download
-        """
-    )
-    
-    parser.add_argument(
-        '--tickers',
-        nargs='+',
-        help='Lista de tickers específicos (ex: PETR4.SA VALE3.SA)'
-    )
     
     parser.add_argument(
         '--force-update',
@@ -436,6 +458,38 @@ Exemplos de uso:
     elapsed = (datetime.now() - start_time).total_seconds()
     logger.info(f"⏱️  Tempo total: {elapsed:.1f}s")
 
+
+def main():
+    parser = argparse.ArgumentParser(description="Data Pipeline - Co-Piloto Quant")
+    parser.add_argument(
+        '--tickers',
+        nargs='*',
+        help='Lista de tickers a processar (ex: PETR4.SA VALE3.SA). Se omitido, processa todos.'
+    )
+    parser.add_argument(
+        '--force-update',
+        action='store_true',
+        help='Força re-download dos dados (ignora cache)'
+    )
+    args = parser.parse_args()
+
+    # Executa pipeline
+    start_time = datetime.now()
+
+    try:
+        run_pipeline(
+            tickers=args.tickers,
+            force_update=args.force_update
+        )
+    except KeyboardInterrupt:
+        logger.warning("\n⚠️  Pipeline interrompido pelo usuário")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"❌ Erro fatal no pipeline: {e}", exc_info=True)
+        sys.exit(1)
+
+    elapsed = (datetime.now() - start_time).total_seconds()
+    logger.info(f"⏱️  Tempo total: {elapsed:.1f}s")
 
 if __name__ == "__main__":
     main()
