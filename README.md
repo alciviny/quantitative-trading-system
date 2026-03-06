@@ -74,6 +74,12 @@ Todos os dados devem ser salvos apenas em `src/co_piloto_quant/data/` conforme o
 
 ---
 
+## 🤖 Agente IA / GitHub Copilot
+
+Quer saber o que um agente de IA pode fazer para ajudar neste projeto? Confira o guia completo:
+
+📖 **[CAPACIDADES_AGENTE_IA.md](CAPACIDADES_AGENTE_IA.md)** - Documentação completa sobre o que agentes de IA podem fazer nesta sessão
+
 ## 📄 Licença
 
 Projeto pessoal para fins de estudo e pesquisa em trading quantitativo.
