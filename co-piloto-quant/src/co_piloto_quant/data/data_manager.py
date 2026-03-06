@@ -13,7 +13,34 @@ from co_piloto_quant.data.data_fetching import fetch_data
 logger = logging.getLogger(__name__)
 
 
+
 class DataManager:
+    @staticmethod
+    def validate_ohlcv_integrity_df(df: pd.DataFrame, min_rows: int = 100) -> tuple[bool, str]:
+        required_cols = ["date", "open", "high", "low", "close", "volume"]
+        # Checa se DataFrame está vazio
+        if df is None or df.empty:
+            return False, "DataFrame vazio"
+        # Checa colunas obrigatórias
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            return False, f"Colunas faltando: {missing_cols}"
+        # Checa nulos
+        nulls = df[required_cols].isnull().sum()
+        if nulls.any():
+            return False, f"Valores nulos em: {nulls[nulls>0].to_dict()}"
+        # Checa número mínimo de linhas
+        if len(df) < min_rows:
+            return False, f"Menos de {min_rows} linhas ({len(df)})"
+        # Checa se datas estão em ordem
+        try:
+            dates = pd.to_datetime(df["date"])
+            if not dates.is_monotonic_increasing:
+                return False, "Datas fora de ordem"
+        except Exception:
+            return False, "Coluna 'date' não é datetime válida"
+        return True, "OK"
+
     """
     DataManager Profissional (Infra de Dados)
 
@@ -131,9 +158,16 @@ class DataManager:
 
     def save_data(self, ticker: str, df: pd.DataFrame):
         if df is None or df.empty:
+            logger.warning(f"[VALIDAÇÃO] {ticker}: DataFrame vazio, não será salvo.")
             return
 
         df = self._normalize_index(df)
+
+        # Validação de integridade
+        is_valid, msg = self.validate_ohlcv_integrity_df(df)
+        if not is_valid:
+            logger.error(f"[VALIDAÇÃO] {ticker}: Falha na validação de integridade: {msg}. Não será salvo.")
+            return
 
         dataset_hash = self._compute_hash(df)
         previous_hash = self._dataset_hash.get(ticker)
